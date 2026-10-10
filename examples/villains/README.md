@@ -6,10 +6,11 @@ go-api service gets from `pkg/app` regardless. It exists to demonstrate
 go-api's interservice communication patterns; `examples/heroes` calls it
 as a client.
 
-Runs with no external dependencies — in-memory store, the same
-HMAC-signed dev tokens `examples/heroes` uses (same env var, same
+Runs with no external dependencies by default — in-memory store, the
+same HMAC-signed dev tokens `examples/heroes` uses (same env var, same
 default secret, so a token minted by either service's `/dev/token`-style
-mechanism is accepted by both).
+mechanism is accepted by both). Set `DATABASE_URL` to run on real
+Postgres instead — see "Running against Postgres instead" below.
 
 ## Run it
 
@@ -96,13 +97,43 @@ required` before it ever reaches an RBAC/ABAC check — try it with and
 without `-cert`/`-key` flags to see the difference. See
 [docs/grpc.md](../../docs/grpc.md#mutual-tls-for-service-to-service-calls).
 
+## Running against Postgres instead
+
+Set `DATABASE_URL` and `main.go` switches from the in-memory `VillainStore`
+to the real `dbx`/pgx-backed `VillainPGStore` (`store_pg.go`)
+automatically — nothing to edit. Both implement the same `villainStore`
+interface `server.go` depends on (`server.go`'s
+`var _ villainStore = (*VillainPGStore)(nil)` — mirrored by `store.go`'s
+equivalent for the in-memory store — is what makes that swap safe to
+make silently).
+
+Apply the schema first, with the separate `migrate` binary — a real
+service runs this as a deploy step, not something the service does to
+itself on every boot:
+
+```shell
+docker run -d --name villains-pg -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=villains -p 5432:5432 postgres:16-alpine
+
+export DATABASE_URL="postgres://postgres:postgres@localhost:5432/villains?sslmode=disable"
+go run ./migrate up      # applies migrations/0001_create_villains
+go run .                 # now runs on VillainPGStore instead of VillainStore
+```
+
+`go run ./migrate down` rolls the schema back (local dev/tests only).
+Under Tilt, this is wired up for you, on its own database alongside
+heroes' — see
+[docs/tilt-dev.md](../../docs/tilt-dev.md#postgres--migrations).
+
 ## Files
 
 | File | What it shows |
 |---|---|
 | `main.go` | Wiring: config, authn verifier, role registry + policy store, `app.New` with `GRPCEnabled: true`, registering the generated server |
 | `villain.go` | The one domain type — no separate Create/Update Go structs; the generated request messages already are the input shape |
-| `store.go` | In-memory store (not a `crud.Store` — villains has no HTTP CRUD surface) |
+| `store.go` | In-memory store (not a `crud.Store` — villains has no HTTP CRUD surface — but it does implement `villainStore`, see `server.go`) |
+| `store_pg.go` | The same `villainStore` interface backed by real `dbx`/pgx — used automatically when `DATABASE_URL` is set, see above |
+| `migrations/` | This service's SQL schema (`villains`), embedded and applied by `migrate/` |
+| `migrate/` | A separate one-off binary that applies/rolls back `migrations/` against `DATABASE_URL` |
 | `server.go` | `VillainServiceServer` implementation: authorize inline (no generic interceptor — see `docs/grpc.md`), map errors via `grpcx.Status` |
 | `policies/villains.cedar` | RBAC (list/read/create/capture by role) + one ABAC forbid (can't capture twice) |
 | `main.go`'s `loadMTLS` | Opt-in mutual TLS — see "Trying mTLS" above |

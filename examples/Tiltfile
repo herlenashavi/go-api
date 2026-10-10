@@ -63,12 +63,19 @@ GOARCH = str(local('go env GOARCH')).strip()
 k8s_yaml(['deploy/k8s/namespace.yaml', 'deploy/k8s/secret.yaml'])
 
 # --- Postgres: backs heroes' PGHeroStore (examples/heroes/store_pg.go)
-# once heroes-migrate below has applied examples/heroes/migrations. See
-# deploy/k8s/postgres.yaml's header comment for why this is a
-# single-replica, PVC-less Deployment rather than anything meant to
-# outlive this demo cluster. ---
+# and villains' VillainPGStore (examples/villains/store_pg.go), once
+# heroes-migrate / villains-migrate below have applied each service's
+# migrations/. See deploy/k8s/postgres.yaml's header comment for why
+# this is a single-replica, PVC-less Deployment rather than anything
+# meant to outlive this demo cluster, and
+# deploy/k8s/postgres-init-configmap.yaml's for how villains gets its
+# own database on the same Postgres server. ---
 
-k8s_yaml(['deploy/k8s/postgres-secret.yaml', 'deploy/k8s/postgres.yaml'])
+k8s_yaml([
+    'deploy/k8s/postgres-secret.yaml',
+    'deploy/k8s/postgres-init-configmap.yaml',
+    'deploy/k8s/postgres.yaml',
+])
 
 k8s_resource(
     'postgres',
@@ -76,21 +83,32 @@ k8s_resource(
     labels=['infra'],
 )
 
-# heroes-migrate applies examples/heroes/migrations against Postgres by
-# running the examples/heroes/migrate binary straight on the host
+# heroes-migrate / villains-migrate apply each service's migrations/
+# against Postgres by running its migrate binary straight on the host
 # (dir='..', same reason the binary local_resources below do) against
 # the port-forward above — not a Dockerized k8s Job — because the whole
 # point of a local Tilt loop is not waiting on an image build for a
 # step that's one `go run` away. resource_deps on 'postgres' makes Tilt
-# wait for its readinessProbe (pg_isready) first; heroes's own
-# resource_deps on this resource, below, then makes heroes wait on it in
-# turn. The password here matches deploy/k8s/postgres-secret.yaml's
-# POSTGRES_PASSWORD by hand — see that file's header comment.
+# wait for its readinessProbe (pg_isready) first; each service's own
+# resource_deps on its migrate resource, below, then makes it wait on
+# that in turn. The passwords here match
+# deploy/k8s/postgres-secret.yaml's POSTGRES_PASSWORD and
+# deploy/k8s/postgres-init-configmap.yaml's villains password by hand —
+# see those files' header comments.
 local_resource(
     'heroes-migrate',
     'DATABASE_URL="postgres://heroes:heroes-dev-password@localhost:5432/heroes?sslmode=disable" go run ./examples/heroes/migrate up',
     dir='..',
     deps=['heroes/migrations', '../pkg/dbmigrate'],
+    resource_deps=['postgres'],
+    labels=['build'],
+)
+
+local_resource(
+    'villains-migrate',
+    'DATABASE_URL="postgres://villains:villains-dev-password@localhost:5432/villains?sslmode=disable" go run ./examples/villains/migrate up',
+    dir='..',
+    deps=['villains/migrations', '../pkg/dbmigrate'],
     resource_deps=['postgres'],
     labels=['build'],
 )
@@ -138,6 +156,7 @@ docker_build_with_restart(
 k8s_resource(
     'villains',
     port_forwards=['8081:8081', '9091:9091'],
+    resource_deps=['villains-migrate'],
     labels=['services'],
 )
 

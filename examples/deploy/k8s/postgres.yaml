@@ -1,10 +1,13 @@
 # A single-replica, PVC-less Postgres for local Tilt dev — backing
-# heroes' PGHeroStore (see examples/heroes/store_pg.go and
-# examples/heroes/migrations). This is disposable demo plumbing, not a
+# heroes' PGHeroStore and villains' VillainPGStore (see each service's
+# store_pg.go and migrations/). This is disposable demo plumbing, not a
 # production topology: the Tiltfile's header comment already notes this
 # cluster "carries no state worth keeping," and the emptyDir volume below
 # makes that literal — a pod reschedule loses the data, which is fine for
 # a database whose entire contents are re-created by `make tilt-up`.
+# postgres-init-configmap.yaml, mounted below, creates villains' second
+# database/user on top of the one POSTGRES_DB/POSTGRES_USER bootstrap
+# for heroes — see that file's header comment.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -52,14 +55,28 @@ spec:
               # subPath so Postgres's "data directory is not empty" check
               # doesn't trip over emptyDir's own lost+found entry.
               subPath: pgdata
+            - name: init
+              mountPath: /docker-entrypoint-initdb.d
+          # Kubernetes only expands $(VAR) references in a container's own
+          # command/args, not in a probe's exec.command — passed literally,
+          # pg_isready would get the four literal characters "$(POSTGRES_USER)"
+          # as -U's value and (since that's not a valid role) silently fall
+          # back to connecting as whatever OS user kubelet's exec runs as
+          # (root, for this image), logging a harmless but noisy
+          # `FATAL: role "root" does not exist` on every probe — confirmed by
+          # actually hitting that log spam against a real cluster. Routing
+          # through `sh -c` instead reads $POSTGRES_USER/$POSTGRES_DB from the
+          # container's real process environment, which does have them (envs
+          # above), fixing both the noise and probing the actual intended
+          # role.
           readinessProbe:
             exec:
-              command: ["pg_isready", "-U", "$(POSTGRES_USER)", "-d", "$(POSTGRES_DB)"]
+              command: ["sh", "-c", "pg_isready -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""]
             initialDelaySeconds: 2
             periodSeconds: 5
           livenessProbe:
             exec:
-              command: ["pg_isready", "-U", "$(POSTGRES_USER)", "-d", "$(POSTGRES_DB)"]
+              command: ["sh", "-c", "pg_isready -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""]
             initialDelaySeconds: 5
             periodSeconds: 10
           resources:
@@ -72,6 +89,9 @@ spec:
       volumes:
         - name: data
           emptyDir: {}
+        - name: init
+          configMap:
+            name: postgres-init
 ---
 apiVersion: v1
 kind: Service
