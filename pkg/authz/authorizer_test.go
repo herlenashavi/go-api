@@ -140,3 +140,91 @@ func TestPolicyStore_Reload(t *testing.T) {
 		t.Fatal("expected read to be denied after reload")
 	}
 }
+
+const servicePolicies = `
+// an exact-name grant -- no role needed, matches CheckService's doc
+// comment on referencing a specific service by identity.
+permit (
+  principal == Service::"heroes",
+  action == Action::"villain:read",
+  resource
+);
+
+// a role-based grant -- the same RoleRegistry hierarchy a User's roles
+// resolve through, just granted via TLSConfig.ServiceRoles instead of a
+// JWT claim.
+permit (
+  principal in Role::"trusted-caller",
+  action == Action::"villain:list",
+  resource
+);
+`
+
+func newServiceTestAuthorizer(t *testing.T) *authz.Authorizer {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "villains.cedar"), []byte(servicePolicies), 0o644); err != nil {
+		t.Fatalf("write policy file: %v", err)
+	}
+	store, err := authz.LoadPolicyDir(dir)
+	if err != nil {
+		t.Fatalf("LoadPolicyDir: %v", err)
+	}
+	roles, err := authz.NewRoleRegistry(authz.Role{Name: "trusted-caller"})
+	if err != nil {
+		t.Fatalf("NewRoleRegistry: %v", err)
+	}
+	return authz.New(store, roles, nil)
+}
+
+// TestAuthorizer_CheckService proves Cedar policies can be written
+// against a calling *service*'s identity (authn.ServiceIdentity, as
+// placed in context by pkg/grpcx's mTLS peer-identity interceptor) —
+// either by exact name or, like a user's roles, via role membership —
+// using the same Authorizer and RoleRegistry a User-principal check
+// would.
+func TestAuthorizer_CheckService(t *testing.T) {
+	a := newServiceTestAuthorizer(t)
+	ctx := context.Background()
+	villain := authz.ResourceRef{Type: "Villain", ID: "v1"}
+
+	cases := []struct {
+		name   string
+		svc    *authn.ServiceIdentity
+		action authz.Action
+		want   authz.Decision
+	}{
+		{"heroes can read by exact identity", &authn.ServiceIdentity{Name: "heroes"}, "villain:read", authz.Allow},
+		{"villains itself cannot read (no grant for its own name)", &authn.ServiceIdentity{Name: "villains"}, "villain:read", authz.Deny},
+		{"trusted-caller role can list", &authn.ServiceIdentity{Name: "some-batch-job", Roles: []string{"trusted-caller"}}, "villain:list", authz.Allow},
+		{"heroes has no role, cannot list", &authn.ServiceIdentity{Name: "heroes"}, "villain:list", authz.Deny},
+		{"unknown service denied by default", &authn.ServiceIdentity{Name: "unknown"}, "villain:read", authz.Deny},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			decision, diag, err := a.CheckService(ctx, tc.svc, tc.action, villain, nil)
+			if err != nil {
+				t.Fatalf("CheckService: %v", err)
+			}
+			if decision != tc.want {
+				t.Fatalf("got %v, want %v (diagnostic reasons: %+v)", decision, tc.want, diag.Reasons)
+			}
+		})
+	}
+}
+
+func TestAuthorizer_AuthorizeService_MapsToProblem(t *testing.T) {
+	a := newServiceTestAuthorizer(t)
+	ctx := context.Background()
+	villain := authz.ResourceRef{Type: "Villain", ID: "v1"}
+
+	heroes := &authn.ServiceIdentity{Name: "heroes"}
+	if err := a.AuthorizeService(ctx, heroes, "villain:read", villain, nil); err != nil {
+		t.Fatalf("expected heroes to be authorized to read, got %v", err)
+	}
+
+	if err := a.AuthorizeService(ctx, heroes, "villain:list", villain, nil); err == nil {
+		t.Fatal("expected heroes (no trusted-caller role) to be denied list")
+	}
+}

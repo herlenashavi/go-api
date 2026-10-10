@@ -45,13 +45,20 @@ Each of these is a real, known gap, not an oversight:
   all — request/response shapes are real Go types, but nothing walks them
   into a spec yet. That's the prerequisite for a generated client, not
   just the client itself.
-- **gRPC streaming and mTLS.** `pkg/grpcx` (added for interservice
-  communication — see `docs/grpc.md`) covers unary RPCs and
-  bearer-token auth/token-forwarding only. A streaming RPC needs its own
-  interceptor wired via `grpc.StreamInterceptor`; mutual TLS between
-  services, and a service-identity story for calls not made on a specific
-  user's behalf (a cron job, a reconciler), are both unaddressed —
-  `grpcx.Dial` connects without TLS by default.
+- **gRPC streaming.** `pkg/grpcx`'s interceptor chain (recovery,
+  request-ID, access logging, mTLS peer identity, bearer-token auth) is
+  entirely unary (`grpc.UnaryServerInterceptor`/`UnaryClientInterceptor`).
+  A streaming RPC needs its own interceptor wired via
+  `grpc.StreamInterceptor` — not provided, and not exercised by either
+  example service.
+- **mTLS CA rotation and issuer integration.** mTLS itself is supported
+  (`grpcx.TLSConfig`/`LoadMTLS`, `authn.ServiceIdentity`,
+  `Authorizer.CheckService` — see `docs/grpc.md`), including hot-reload
+  of leaf certificates. Not supported: rotating the CA itself on a
+  long-lived client connection (by design — see that doc's "What's
+  asymmetric about reload"), and any integration with a cert issuer
+  (SPIRE, cert-manager) to derive `TLSConfig.ServiceRoles` automatically
+  rather than maintaining that map in Go.
 
 ## Known limitations worth stating plainly
 

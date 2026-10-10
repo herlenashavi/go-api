@@ -14,6 +14,7 @@ import (
 	"github.com/herlenashavi/go-api/pkg/authn"
 	"github.com/herlenashavi/go-api/pkg/authz"
 	"github.com/herlenashavi/go-api/pkg/config"
+	"github.com/herlenashavi/go-api/pkg/grpcx"
 	"github.com/herlenashavi/go-api/pkg/health"
 )
 
@@ -35,6 +36,37 @@ func grpcPort() int {
 		}
 	}
 	return 9091
+}
+
+// loadMTLS returns nil, nil when mTLS isn't configured — mutual TLS is
+// entirely opt-in for this example, so `go run .` keeps working with
+// zero setup. Generate dev certs with:
+//
+//	go run ./deploy/mtls/gencerts
+//
+// and set the three env vars it prints to turn this on.
+//
+// This example's RPC handlers (server.go) authorize purely against the
+// forwarded user token (authn.Principal), same as without mTLS — turning
+// this on adds transport-level mutual authentication and encryption
+// without changing any authorization decision. ServiceRoles is wired up
+// here (so a real authn.ServiceIdentity with this role does land in
+// context) but nothing in server.go reads it; see
+// pkg/authz/authorizer_test.go's CheckService tests and docs/grpc.md's
+// mTLS section for a worked example of authorizing by calling-service
+// identity instead of (or alongside) a forwarded user token.
+func loadMTLS() (*grpcx.MTLSStore, error) {
+	certFile, keyFile, caFile := os.Getenv("MTLS_CERT_FILE"), os.Getenv("MTLS_KEY_FILE"), os.Getenv("MTLS_CA_FILE")
+	if certFile == "" && keyFile == "" && caFile == "" {
+		return nil, nil
+	}
+	return grpcx.LoadMTLS(grpcx.TLSConfig{
+		CertFile:          certFile,
+		KeyFile:           keyFile,
+		CAFile:            caFile,
+		RequireClientCert: os.Getenv("MTLS_REQUIRE_CLIENT_CERT") == "true",
+		ServiceRoles:      map[string][]string{"heroes": {"trusted-caller"}},
+	})
 }
 
 func main() {
@@ -85,18 +117,28 @@ func run(ctx context.Context) error {
 
 	store := NewVillainStore()
 
+	mtls, err := loadMTLS()
+	if err != nil {
+		return err
+	}
+
 	application, err := app.New(ctx, app.Options{
 		Config:      cfg,
 		Verifier:    verifier,
 		Authorizer:  authorizer,
 		GRPCEnabled: true,
 		GRPCPort:    grpcPort(),
+		GRPCMTLS:    mtls,
 		HealthChecks: []health.Check{
 			{Name: "villain-store", Checker: func(context.Context) error { return nil }},
 		},
 	})
 	if err != nil {
 		return err
+	}
+	if mtls != nil {
+		go mtls.Watch(ctx, 30*time.Second, application.Logger)
+		application.Logger.Info("mTLS enabled for the gRPC server")
 	}
 
 	villainsv1.RegisterVillainServiceServer(application.GRPCServer, NewVillainServer(store, authorizer))

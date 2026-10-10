@@ -14,7 +14,11 @@ data you can read, review, and change without touching Go code.**
    Cedar entity (`Role::"admin"`) whose `Parents` are the roles it
    inherits from.
 2. **Principals** (`authn.Principal`) — the authenticated caller, carrying
-   `Roles []string` as asserted by your IdP (a JWT claim, typically).
+   `Roles []string` as asserted by your IdP (a JWT claim, typically). A
+   calling *service*, authenticated via mTLS instead of a bearer token,
+   gets the parallel `authn.ServiceIdentity` and `Authorizer.CheckService`/
+   `AuthorizeService` — same roles-and-policies model, see
+   [docs/grpc.md](grpc.md#mutual-tls-for-service-to-service-calls).
 3. **Policies** (`.cedar` files, loaded by `authz.LoadPolicyDir`) — `permit`
    and `forbid` statements over `(principal, action, resource)`, written
    against the roles above.
