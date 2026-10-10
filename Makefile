@@ -23,8 +23,7 @@ run:
 	cd examples/heroes && go run .
 
 # Run both example services in a local Kubernetes cluster. See
-# docs/tilt-dev.md — requires `minikube start --container-runtime=docker`
-# first (the flag matters; see that doc).
+# docs/tilt-dev.md — requires minikube start first.
 tilt-up:
 	tilt up
 

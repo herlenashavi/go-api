@@ -16,38 +16,20 @@ brew install docker minikube tilt kubectl   # macOS; see each tool's own install
 
 Docker Desktop (or another Docker-compatible daemon) needs to actually be
 **running** — `docker info` should succeed — before `minikube start`.
+This matters enough to call out explicitly: the Tiltfile and manifests in
+this repo were authored and syntax-validated (`tilt ci`, `kubeconform`,
+`hadolint` — see below) without a running Docker daemon available in the
+sandbox that wrote them, so the wiring is correct by inspection and static
+validation, but **the full `tilt up` loop has not been run end-to-end in
+this repository's CI/sandbox**. Please treat the first run as the real
+first run, and open an issue if something doesn't match this doc.
 
 ## Run it
 
 ```shell
-minikube start --container-runtime=docker
+minikube start
 tilt up
 ```
-
-**`--container-runtime=docker` is not optional.** Tilt's whole
-zero-push, build-straight-into-the-cluster trick for minikube only works
-when minikube's node runs Docker as its container runtime — it shares
-its image store directly with the Docker daemon Tilt just built with, so
-nothing needs pushing anywhere. If minikube ends up on `containerd`
-instead (its `auto` runtime selection can land there depending on
-platform/version — check with `minikube profile list`), that sharing
-doesn't exist, and Tilt falls back to pushing the image to a registry —
-defaulting to Docker Hub for an unqualified name like `go-api/heroes`,
-which fails:
-
-```
-Build Failed: docker push: pushing image "docker.io/go-api/heroes":
-push access denied, repository does not exist or may require authorization
-```
-
-This isn't a bug in this repo's Tiltfile or Dockerfiles — the image
-*builds* successfully every time; only the push step fails, because
-there's nowhere for it to usefully go. If you hit this on a cluster you
-already created without the flag, the fix is `minikube delete &&
-minikube start --container-runtime=docker` (fine for this repo's demo
-cluster — it carries no state worth keeping). This exact failure mode,
-diagnosis, and fix were confirmed by actually hitting it against a real
-`containerd`-runtime minikube cluster and resolving it this way.
 
 Tilt prints a URL (default `http://localhost:10350`) with a live view of
 both services building and deploying. Once both show green:
@@ -137,10 +119,10 @@ deploy/
 
 The Cedar policy `ConfigMap`s aren't static files here — see §2 above.
 
-## Validating without a running cluster
+## Validating this without a running cluster
 
-Reviewing or extending this setup without Docker/minikube available doesn't
-block much — these checks don't need either:
+In case you're reviewing this setup (or extending it) without Docker/minikube
+running, these checks don't need either:
 
 ```shell
 tilt ci       # parses and loads the Tiltfile; fails at the cluster-connect
@@ -150,12 +132,3 @@ tilt ci       # parses and loads the Tiltfile; fails at the cluster-connect
 kubeconform deploy/k8s/*.yaml   # validates manifests against the k8s OpenAPI schema
 hadolint deploy/tilt/*.Dockerfile examples/*/Dockerfile
 ```
-
-`make tilt-validate` runs all three. This repo's full `tilt up` loop —
-both images building and deploying, both pods reaching `Running`, the
-`/health` endpoints and the gRPC health check responding, the
-cross-service `nemesis` call working end-to-end through the cluster, and
-a `live_update` edit reaching the running pod in ~1 second with zero
-Kubernetes-level restarts — has been run for real against a
-`--container-runtime=docker` minikube cluster; it is not merely inferred
-from the static checks above.

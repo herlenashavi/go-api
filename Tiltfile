@@ -5,15 +5,8 @@
 # nothing here is minikube-specific. Prerequisites and a full walkthrough
 # live in docs/tilt-dev.md; the short version:
 #
-#   minikube start --container-runtime=docker
+#   minikube start
 #   tilt up
-#
-# The --container-runtime=docker flag matters: it's what lets Tilt build
-# straight into minikube's own Docker daemon with no registry push. See
-# docs/tilt-dev.md's "Run it" section for what goes wrong without it
-# (confirmed by actually hitting that failure against a real
-# containerd-runtime minikube cluster) and how to recover if you already
-# have a cluster without it.
 #
 # Two things worth understanding before reading the rest of this file:
 #
