@@ -31,7 +31,7 @@ application.ListenAndServe(ctx)
 | Package | Responsibility |
 |---|---|
 | `pkg/config` | Env-driven settings, embed `config.Base` in your own struct |
-| `pkg/logging` | `log/slog` JSON logging, trace/request-id correlation, secret redaction |
+| `pkg/logging` | Always-JSON `log/slog` logging, trace/request-id correlation, and a built-in PII/secret-redacting handler every log line passes through — see [docs/logging.md](docs/logging.md) |
 | `pkg/telemetry` | OTel traces + metrics (OTLP), Prometheus scrape endpoint, RED metrics |
 | `pkg/problem` | RFC 9457 `application/problem+json` error responses |
 | `pkg/httpx` | Typed handler wrapper: path/query/header/body decode, validation, respond |
@@ -68,6 +68,18 @@ dbx/pgx-backed shape a real service's store takes.
 - Errors: [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) `application/problem+json`, every response carrying `requestId`/`traceId` for support correlation (`pkg/problem`).
 - Bodies: camelCase JSON.
 - Lists: `{"data": [...], "meta": {...}}`, cursor pagination by default with offset (`?offset=&limit=`) as a documented fallback (`pkg/httpx.Page`, `pkg/crud.ListParams`).
+
+## Logging
+
+Every service logs structured JSON, unconditionally — there's no "pretty
+text for local dev" mode, in debug or otherwise. Every log line, from any
+package, passes through a built-in PII/secret-redacting handler before
+it's encoded: known-sensitive field names (`password`, `email`, `ssn`,
+...) are masked outright, and every string is additionally scanned for
+emails, phone numbers, IPv4 addresses, and Luhn-validated payment card
+numbers, wherever they appear — not just under a matching key name. See
+[docs/logging.md](docs/logging.md), including the honest limit of what a
+regex-based filter can and can't catch.
 
 ## Interservice communication
 

@@ -62,6 +62,13 @@ Each of these is a real, known gap, not an oversight:
 
 ## Known limitations worth stating plainly
 
+- `pkg/logging`'s PII filter (`docs/logging.md`) is pattern- and
+  key-name-based. It catches PII with a recognizable shape (emails,
+  phone numbers, IPs, Luhn-valid card numbers) or an identifiable field
+  name — not a bare person's name in free text, which no regex can
+  reliably distinguish from two ordinary capitalized words. It is
+  defense-in-depth, not a substitute for not logging PII in the first
+  place.
 - `pkg/httpx.Decode`'s struct-tag binding covers common scalar types,
   `uuid.UUID`, `time.Time` (RFC 3339), and `[]string` query params — it is
   not a general-purpose encoder. Anything more exotic is a case for a

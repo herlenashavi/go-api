@@ -1,16 +1,29 @@
-// Package logging configures structured, JSON-by-default logging on top of
-// the standard library's log/slog.
+// Package logging configures structured JSON logging on top of the
+// standard library's log/slog — every service built on go-api logs JSON,
+// unconditionally; there is no "pretty text for local dev" mode to
+// accidentally ship, because production logging pipelines (and this
+// package's own PII filter — see pii.go) are built against structured
+// fields, not a human-formatted line.
 //
-// It deliberately avoids global mutable state: callers compose a logger from
-// explicit "field functions" (see Fielder) that pull values — a trace ID, a
-// request ID, an authenticated principal — out of a context.Context. Other
-// go-api packages (telemetry, middleware, authn) each expose their own
-// Fielder; app.New wires them together once at startup. logging itself knows
-// nothing about traces, requests, or principals.
+// It deliberately avoids global mutable state: callers compose a logger
+// from explicit "field functions" (see Fielder) that pull values — a
+// trace ID, a request ID, an authenticated principal — out of a
+// context.Context. Other go-api packages (telemetry, middleware, authn)
+// each expose their own Fielder; app.New wires them together once at
+// startup. logging itself knows nothing about traces, requests, or
+// principals.
+//
+// Every record passing through a logger built by New — regardless of
+// level, regardless of which package or handler logged it — is run
+// through the PII-redacting handler in pii.go before it reaches the
+// JSON encoder. That is the whole point of building it into New rather
+// than leaving it as an opt-in helper call sites have to remember to
+// use: a log line can't skip it by omission.
 package logging
 
 import (
 	"context"
+	"io"
 	"log/slog"
 	"os"
 	"strings"
@@ -25,19 +38,19 @@ type Fielder func(ctx context.Context) []slog.Attr
 type Config struct {
 	// Level is one of "debug", "info", "warn", "error". Defaults to "info".
 	Level string
-	// JSON selects slog.JSONHandler output. When false, a human-readable
-	// text handler is used instead — intended for local development only.
-	JSON bool
 	// ServiceName and Env are attached to every log line.
 	ServiceName string
 	Env         string
-	// Output defaults to os.Stdout.
-	Output *os.File
+	// Output defaults to os.Stdout. Any io.Writer works — a bytes.Buffer
+	// in a test, for instance — not just a real file.
+	Output io.Writer
 }
 
-// New builds the process-wide *slog.Logger. fielders are consulted, in
-// order, on every log record to enrich it with request-scoped context (see
-// Fielder); pass none for a context-agnostic logger (e.g. in tests).
+// New builds the process-wide *slog.Logger: JSON output, every record
+// passed through the PII/secret-redacting handler (pii.go) before
+// encoding, and enriched with whatever fielders supply from context.
+// fielders are consulted, in order, on every log record; pass none for a
+// context-agnostic logger (e.g. in tests).
 func New(cfg Config, fielders ...Fielder) *slog.Logger {
 	out := cfg.Output
 	if out == nil {
@@ -45,16 +58,11 @@ func New(cfg Config, fielders ...Fielder) *slog.Logger {
 	}
 
 	opts := &slog.HandlerOptions{Level: parseLevel(cfg.Level)}
-
-	var base slog.Handler
-	if cfg.JSON {
-		base = slog.NewJSONHandler(out, opts)
-	} else {
-		base = slog.NewTextHandler(out, opts)
-	}
+	base := slog.NewJSONHandler(out, opts)
+	redacting := &piiHandler{next: base}
 
 	h := &contextHandler{
-		next:     base,
+		next:     redacting,
 		fielders: fielders,
 		baseAttrs: []slog.Attr{
 			slog.String("service", cfg.ServiceName),
@@ -77,8 +85,12 @@ func parseLevel(level string) slog.Level {
 	}
 }
 
-// contextHandler wraps a slog.Handler and injects fielder-derived attributes
-// into every record before delegating.
+// contextHandler wraps a slog.Handler and injects fielder-derived
+// attributes into every record before delegating to it — in New's chain,
+// that delegate is piiHandler, so fielder-supplied attributes get
+// redaction-scanned exactly like everything else. It does not redact
+// anything itself; that's piiHandler's job, kept separate so this type
+// stays about one thing (context enrichment).
 type contextHandler struct {
 	next      slog.Handler
 	fielders  []Fielder
@@ -110,6 +122,14 @@ func (h *contextHandler) WithGroup(name string) slog.Handler {
 // secretKeys are redacted by Redact, matched case-insensitively against map
 // keys. Extend by calling RedactKeys before Redact is used, or build your
 // own redaction and pass logged bodies through it instead.
+//
+// This is a narrower, older mechanism than pii.go's always-on handler —
+// kept because middleware.AccessLog's optional request-body logging
+// needs to redact a *parsed JSON body* (map[string]any/[]any) before
+// handing it to slog.Any, not a string slog is about to encode; pii.go's
+// handler still gets a second, independent pass at the result (its own
+// sensitive-key set is deliberately a superset of this one), so a field
+// name missing from this list but present in pii.go's is still caught.
 var secretKeys = map[string]struct{}{
 	"password":      {},
 	"secret":        {},

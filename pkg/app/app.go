@@ -142,7 +142,6 @@ func New(ctx context.Context, opts Options) (*App, error) {
 
 	logger := logging.New(logging.Config{
 		Level:       cfg.LogLevel,
-		JSON:        !cfg.Debug,
 		ServiceName: cfg.ServiceName,
 		Env:         cfg.Env,
 	}, middleware.RequestIDLogFields, authn.LogFields, authn.ServiceLogFields, telemetry.TraceLogFields)
