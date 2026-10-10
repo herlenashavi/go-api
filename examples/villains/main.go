@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"strconv"
 	"syscall"
+	"time"
 
 	villainsv1 "github.com/herlenashavi/go-api/gen/villains/v1"
 	"github.com/herlenashavi/go-api/pkg/app"
@@ -99,6 +100,11 @@ func run(ctx context.Context) error {
 	}
 
 	villainsv1.RegisterVillainServiceServer(application.GRPCServer, NewVillainServer(store, authorizer))
+
+	// See examples/heroes/main.go's identical call for why this exists
+	// and what drives the latency when policies/villains.cedar changes
+	// under deploy/tilt.
+	go policyStore.WatchAndReload(ctx, 5*time.Second, application.Logger)
 
 	return application.ListenAndServe(ctx)
 }

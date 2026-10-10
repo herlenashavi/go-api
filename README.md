@@ -111,6 +111,21 @@ things it does differently, and why:
 | Readiness checks (`smtplib`, `psycopg2`) did blocking I/O with no timeout, able to hang the health endpoint | `health.Router` bounds every check with `PerCheckTimeout` and never waits on a hung checker past it |
 | `ModelRouter.settings` read `self.app` before `self.app` existed — always `None` | N/A by construction — Go generics don't have an init-order equivalent to get wrong |
 
+## Running in Kubernetes (Tilt + minikube)
+
+Both example services also run in a local Kubernetes cluster with a fast
+edit/rebuild loop:
+
+```shell
+minikube start
+tilt up
+```
+
+See [docs/tilt-dev.md](docs/tilt-dev.md) — it covers the two things
+actually worth learning from this setup (a fast live-update loop for a
+compiled Go binary, and Cedar policy hot reload wired through a
+`ConfigMap`), not just the run commands.
+
 ## Development
 
 ```shell
