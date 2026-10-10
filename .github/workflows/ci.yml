@@ -1,0 +1,115 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+  # Required for the vulnerability-scan job to publish SARIF results to
+  # the repo's Security tab (Code scanning alerts).
+  security-events: write
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Format check
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "The following files are not gofmt'd:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Build
+        run: go build ./...
+
+      - name: Test (race detector)
+        run: go test -race ./...
+
+  build-and-scan:
+    name: Build & scan (${{ matrix.service }})
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [heroes, villains]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@v4
+
+      # Builds the real production image (examples/<service>/Dockerfile,
+      # the distroless multi-stage build) — not the Tilt-only dev image
+      # under examples/deploy/tilt/, which only exists to make the local
+      # live-reload loop fast and is never what ships. Loaded into the
+      # runner's local Docker daemon (not pushed anywhere) so the scan
+      # step below can inspect it.
+      - name: Build image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: examples/${{ matrix.service }}/Dockerfile
+          tags: go-api/${{ matrix.service }}:ci
+          push: false
+          load: true
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+
+      # Vulnerability scan, report-only: exit-code 0 means a finding never
+      # fails this job. The two Trivy runs below produce the same
+      # underlying scan in two formats — SARIF for GitHub's own Security
+      # tab (richer, but only readable there), and a plain table as a
+      # downloadable build artifact (readable without any GitHub UI, and
+      # survives independent of code-scanning settings/permissions).
+      - name: Scan image (SARIF, for the Security tab)
+        uses: aquasecurity/trivy-action@0.36.0
+        with:
+          image-ref: go-api/${{ matrix.service }}:ci
+          format: sarif
+          output: trivy-${{ matrix.service }}.sarif
+          severity: CRITICAL,HIGH,MEDIUM
+          exit-code: '0'
+
+      # Only takes effect on a repo with GitHub Advanced Security enabled
+      # (required for code scanning on a private repo — this one is
+      # private). continue-on-error so a repo without GHAS still gets a
+      # complete, green pipeline; the table report below is the
+      # guaranteed-to-work deliverable either way.
+      - name: Upload SARIF to code scanning
+        uses: github/codeql-action/upload-sarif@v4.38.3
+        continue-on-error: true
+        with:
+          sarif_file: trivy-${{ matrix.service }}.sarif
+          category: trivy-${{ matrix.service }}
+
+      - name: Scan image (human-readable report)
+        uses: aquasecurity/trivy-action@0.36.0
+        with:
+          image-ref: go-api/${{ matrix.service }}:ci
+          format: table
+          output: trivy-${{ matrix.service }}-report.txt
+          severity: CRITICAL,HIGH,MEDIUM
+          exit-code: '0'
+
+      - name: Upload vulnerability report artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: trivy-report-${{ matrix.service }}
+          path: trivy-${{ matrix.service }}-report.txt
+          retention-days: 30

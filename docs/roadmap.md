@@ -24,6 +24,10 @@ they're visible and revisitable, not buried in a chat transcript.
   `docs/config.md`, including what moved into `Base` (gRPC listen
   address, dev JWT secret, mTLS file paths) versus what deliberately
   stayed out (mTLS `ServiceRoles`, a peer's address) and why.
+- **CI**: test, build each example's production image, scan it with
+  Trivy, publish a report — no registry push (there's nowhere to push
+  to yet), and the scan is report-only, not a merge gate. See
+  `docs/ci.md` for how to turn either of those on later.
 
 ## Deferred — phase 2/3
 
