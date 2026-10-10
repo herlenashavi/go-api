@@ -95,7 +95,7 @@ Both example services also run in a local Kubernetes cluster with a fast
 edit/rebuild loop:
 
 ```shell
-minikube start
+minikube start --container-runtime=docker  # see docs/tilt-dev.md for why this flag matters
 tilt up
 ```
 
