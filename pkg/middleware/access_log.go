@@ -116,5 +116,11 @@ func logRequestBody(r *http.Request, logger *slog.Logger) {
 	if err := json.Unmarshal(data, &v); err != nil {
 		return // not valid JSON — nothing to log
 	}
+	// Two independent redaction passes apply here, not one: logging.Redact
+	// strips known-sensitive *keys* from the parsed body right now; every
+	// logger built by logging.New also runs the resulting value through
+	// its own, broader PII-redacting handler (pkg/logging's pii.go) before
+	// it's ever encoded — catching, e.g., an email address embedded in a
+	// free-text field this call's key-based pass has no way to know about.
 	logger.DebugContext(r.Context(), "request body", slog.Any("body", logging.Redact(v)))
 }
