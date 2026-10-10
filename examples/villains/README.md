@@ -76,6 +76,26 @@ token — villains' own logs show the same request ID heroes' did, and its
 Cedar policies see the same principal, not a separate service identity.
 See [docs/grpc.md](../../docs/grpc.md).
 
+## Trying mTLS between heroes and villains
+
+Mutual TLS is entirely opt-in here — unset, everything above works
+exactly as shown. To turn it on:
+
+```shell
+go run ./../../deploy/mtls/gencerts   # from this directory; prints the env vars below
+
+MTLS_CERT_FILE=.../villains-cert.pem MTLS_KEY_FILE=.../villains-key.pem \
+MTLS_CA_FILE=.../ca.pem MTLS_REQUIRE_CLIENT_CERT=true \
+  go run .
+```
+
+and the matching `MTLS_CERT_FILE=.../heroes-cert.pem ...` env vars when
+running `examples/heroes`. With `MTLS_REQUIRE_CLIENT_CERT=true`, a
+`grpcurl` call with no client cert now fails with `tls: certificate
+required` before it ever reaches an RBAC/ABAC check — try it with and
+without `-cert`/`-key` flags to see the difference. See
+[docs/grpc.md](../../docs/grpc.md#mutual-tls-for-service-to-service-calls).
+
 ## Files
 
 | File | What it shows |
@@ -85,6 +105,7 @@ See [docs/grpc.md](../../docs/grpc.md).
 | `store.go` | In-memory store (not a `crud.Store` — villains has no HTTP CRUD surface) |
 | `server.go` | `VillainServiceServer` implementation: authorize inline (no generic interceptor — see `docs/grpc.md`), map errors via `grpcx.Status` |
 | `policies/villains.cedar` | RBAC (list/read/create/capture by role) + one ABAC forbid (can't capture twice) |
+| `main.go`'s `loadMTLS` | Opt-in mutual TLS — see "Trying mTLS" above |
 
 The proto contract lives at the repo root: `proto/villains/v1/villains.proto`,
 generated into `gen/villains/v1/` via `buf generate` (see `docs/grpc.md`).

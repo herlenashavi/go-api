@@ -34,6 +34,21 @@ func devJWTSecret() []byte {
 	return []byte("dev-secret-change-me")
 }
 
+// loadMTLS returns nil, nil when mTLS isn't configured — entirely
+// opt-in, same reasoning as examples/villains's identical function
+// (which this mirrors exactly, since LoadMTLS's result works equally as
+// Dependencies.MTLS for a server or, here, a client — see
+// grpcx.Dial). Generate dev certs with `go run ./deploy/mtls/gencerts`
+// and set the three env vars it prints to turn this on; see
+// docs/grpc.md's mTLS section.
+func loadMTLS() (*grpcx.MTLSStore, error) {
+	certFile, keyFile, caFile := os.Getenv("MTLS_CERT_FILE"), os.Getenv("MTLS_KEY_FILE"), os.Getenv("MTLS_CA_FILE")
+	if certFile == "" && keyFile == "" && caFile == "" {
+		return nil, nil
+	}
+	return grpcx.LoadMTLS(grpcx.TLSConfig{CertFile: certFile, KeyFile: keyFile, CAFile: caFile})
+}
+
 // villainsAddr is where examples/villains' gRPC server listens, by
 // default — override with VILLAINS_GRPC_ADDR if you run it elsewhere.
 func villainsAddr() string {
@@ -122,11 +137,20 @@ func run(ctx context.Context) error {
 	// connects lazily) — the first call to GetVillain is where
 	// unreachability would actually surface, as a grpcx.Problem-mapped
 	// error on whatever request triggered it. ---
+	mtls, err := loadMTLS()
+	if err != nil {
+		return err
+	}
 	villains, err := NewVillainsClient(villainsAddr(), grpcx.Dependencies{
 		Logger:         application.Logger,
 		TracerProvider: application.Telemetry.TracerProvider,
 		MeterProvider:  application.Telemetry.MeterProvider,
+		MTLS:           mtls,
 	})
+	if mtls != nil {
+		go mtls.Watch(ctx, 30*time.Second, application.Logger)
+		application.Logger.Info("mTLS enabled for the villains gRPC client")
+	}
 	if err != nil {
 		return err
 	}

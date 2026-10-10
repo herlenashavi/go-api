@@ -74,11 +74,19 @@ dbx/pgx-backed shape a real service's store takes.
 Services talk to each other over gRPC (`pkg/grpcx`), not HTTP: a server
 with the same observability/auth posture as the HTTP stack (request ID,
 panic recovery, access logging, OTel tracing/metrics via the exact same
-providers, bearer-token authentication), and a client dial helper that
-propagates the calling request's ID and — deliberately, not by accident —
-the caller's own bearer token, so a downstream service's own Cedar
-policies see the same principal rather than a separate service identity.
-See [docs/grpc.md](docs/grpc.md).
+providers, bearer-token authentication, optional mutual TLS), and a
+client dial helper that propagates the calling request's ID and —
+deliberately, not by accident — the caller's own bearer token, so a
+downstream service's own Cedar policies see the same principal rather
+than a separate service identity.
+
+Two identity mechanisms, answering two different questions, compose on
+the same call: a forwarded bearer token says *which user* a call is on
+behalf of; mTLS (`grpcx.TLSConfig`/`LoadMTLS`, `authn.ServiceIdentity`,
+`Authorizer.CheckService`) says *which service* is calling, verified by
+the TLS handshake itself rather than an assertion either side could
+fabricate — the right mechanism for a call with no user behind it at all
+(a cron job, a reconciler). See [docs/grpc.md](docs/grpc.md).
 
 ## Authorization
 

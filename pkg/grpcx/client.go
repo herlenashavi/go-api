@@ -2,9 +2,11 @@ package grpcx
 
 import (
 	"context"
+	"net"
 
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 
@@ -15,17 +17,20 @@ import (
 // Dial builds a *grpc.ClientConn to target with go-api's default client
 // behavior: OTel tracing/metrics via the same providers as the rest of the
 // service (deps.TracerProvider/MeterProvider), the calling request's ID
-// forwarded so logs correlate end-to-end across the service boundary, and
-// — only if the calling context actually carries one via
+// forwarded so logs correlate end-to-end across the service boundary,
+// and — only if the calling context actually carries one via
 // authn.WithRawToken — the original caller's bearer token forwarded too
 // (see that function's doc comment on when that is and isn't
 // appropriate).
 //
 // Connects without TLS by default (insecure.NewCredentials()), which is
 // fine for same-cluster/same-host calls in an example or a service mesh
-// that terminates TLS itself; pass grpc.WithTransportCredentials with
-// real credentials via extraOpts for anything that needs it, which
-// overrides this default since DialOptions apply in order.
+// that terminates TLS itself. If deps.MTLS is set (via LoadMTLS), it
+// connects with mutual TLS instead: this service's own certificate is
+// presented, and target's host is verified against the CA in
+// TLSConfig.CAFile — see docs/grpc.md. Either way, pass
+// grpc.WithTransportCredentials via extraOpts to override — DialOptions
+// apply in order, so a later one wins.
 //
 // Per modern grpc-go, Dial does not block: the connection is established
 // lazily on first use, so a reachability problem surfaces on the first
@@ -39,13 +44,32 @@ func Dial(target string, deps Dependencies, extraOpts ...grpc.DialOption) (*grpc
 		statsOpts = append(statsOpts, otelgrpc.WithMeterProvider(deps.MeterProvider))
 	}
 
+	transportCreds := insecure.NewCredentials()
+	if deps.MTLS != nil {
+		transportCreds = credentials.NewTLS(deps.MTLS.clientTLSConfig(targetHost(target)))
+	}
+
 	opts := append([]grpc.DialOption{
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithTransportCredentials(transportCreds),
 		grpc.WithStatsHandler(otelgrpc.NewClientHandler(statsOpts...)),
 		grpc.WithChainUnaryInterceptor(forwardingInterceptor()),
 	}, extraOpts...)
 
 	return grpc.NewClient(target, opts...)
+}
+
+// targetHost strips the port off a "host:port" dial target for use as
+// the TLS ServerName (SNI + the name the peer's certificate is checked
+// against). Falls back to the target as-is if it isn't in that shape —
+// e.g. a custom grpc resolver scheme — rather than failing Dial itself;
+// a genuinely wrong ServerName surfaces as a handshake failure on the
+// first call, same as any other unreachable-target problem.
+func targetHost(target string) string {
+	host, _, err := net.SplitHostPort(target)
+	if err != nil {
+		return target
+	}
+	return host
 }
 
 // forwardingInterceptor carries the calling context's request ID and

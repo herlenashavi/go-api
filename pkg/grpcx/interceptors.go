@@ -10,6 +10,7 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
@@ -153,4 +154,40 @@ func bearerTokenFromMetadata(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("the %q metadata value must be in the form %q", authorizationMetadataKey, prefix+"<token>")
 	}
 	return token, nil
+}
+
+// peerIdentityInterceptor extracts the verified client certificate from
+// the connection's TLS state (if the caller presented one — nothing here
+// requires it; TLSConfig.RequireClientCert is what makes that
+// mandatory) and places an authn.ServiceIdentity in context. It runs
+// whether or not Dependencies.MTLS was even configured on this server,
+// since a client certificate can only be present at all if the
+// transport itself is TLS with a configured ClientCAs/ClientAuth — on a
+// plaintext or server-only-TLS connection this is simply a no-op.
+func peerIdentityInterceptor(serviceRoles map[string][]string) grpc.UnaryServerInterceptor {
+	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+		if identity := extractServiceIdentity(ctx, serviceRoles); identity != nil {
+			ctx = authn.WithServiceIdentity(ctx, identity)
+		}
+		return handler(ctx, req)
+	}
+}
+
+func extractServiceIdentity(ctx context.Context, serviceRoles map[string][]string) *authn.ServiceIdentity {
+	p, ok := peer.FromContext(ctx)
+	if !ok || p.AuthInfo == nil {
+		return nil
+	}
+	tlsInfo, ok := p.AuthInfo.(credentials.TLSInfo)
+	if !ok || len(tlsInfo.State.PeerCertificates) == 0 {
+		return nil
+	}
+
+	cert := tlsInfo.State.PeerCertificates[0]
+	name := peerIdentityName(cert)
+	return &authn.ServiceIdentity{
+		Name:  name,
+		Roles: serviceRoles[name],
+		Cert:  cert,
+	}
 }

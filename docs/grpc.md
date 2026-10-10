@@ -94,6 +94,88 @@ row-level ABAC check ("can't capture an already-captured villain") that
 needs the real row loaded first — identical reasoning to
 `examples/heroes/retire.go`'s HTTP-side equivalent.
 
+## Mutual TLS for service-to-service calls
+
+Bearer-token auth (above) answers "which *user* is this call on behalf
+of." mTLS answers a different question: "which *service* is calling" —
+verified by the TLS handshake itself, not an assertion either side could
+fabricate. `pkg/grpcx`'s `TLSConfig`/`MTLSStore` wire this up; the result
+lands in context as `authn.ServiceIdentity`, the mTLS counterpart to
+`authn.Principal`.
+
+```go
+mtls, err := grpcx.LoadMTLS(grpcx.TLSConfig{
+    CertFile:          "/etc/certs/tls.crt", // this service's own cert
+    KeyFile:           "/etc/certs/tls.key",
+    CAFile:             "/etc/certs/ca.crt",  // trust root for verifying peers
+    RequireClientCert: true,                  // reject callers with no cert
+    ServiceRoles: map[string][]string{
+        "heroes": {"trusted-caller"},          // roles aren't read from the cert
+    },
+})
+if err != nil { ... }
+
+// Hot reload: certs rotate (cert-manager, SPIRE, a renewal cron job) —
+// a long-lived server shouldn't need a restart to pick up a renewed one.
+go mtls.Watch(ctx, 30*time.Second, application.Logger)
+
+server := grpcx.NewServer(grpcx.Dependencies{MTLS: mtls, Verifier: verifier})
+```
+
+```go
+// Client side: same TLSConfig, typically loaded once and shared.
+client, err := grpcx.Dial("villains:9091", grpcx.Dependencies{MTLS: mtls})
+```
+
+Both sides normally load the *same* `TLSConfig` shape (one cert/key pair
+issued to this service, one shared CA file) — the common case is every
+service in a trust domain issued a cert by the same internal CA.
+
+**Inside a handler**, `authn.ServiceIdentityFromContext(ctx)` gets you
+the caller's verified identity, and `Authorizer.CheckService`/
+`AuthorizeService` evaluate Cedar policies against it — by exact name or
+by role, exactly like a `User` principal:
+
+```go
+// policies/villains.cedar
+permit (principal == Service::"heroes", action == Action::"villain:read", resource);
+permit (principal in Role::"trusted-caller", action == Action::"villain:list", resource);
+```
+
+```go
+svc, ok := authn.ServiceIdentityFromContext(ctx)
+if !ok { return nil, grpcx.Status(problem.Unauthorized("")) }
+if err := s.authorizer.AuthorizeService(ctx, svc, "villain:read", resource, nil); err != nil {
+    return nil, grpcx.Status(err)
+}
+```
+
+A single call can carry **both** an `authn.Principal` (forwarded user
+token) and an `authn.ServiceIdentity` (mTLS peer) — the recommended
+production shape for a user-initiated interservice call: mTLS proves
+*which service* is calling, the forwarded token proves *which user* it's
+calling on behalf of. Authorize against whichever (or both) a given
+policy actually needs. A call with `ServiceIdentity` only and no
+`Principal` is the right shape for a service acting on its own behalf —
+a cron job, a reconciler — with no user to act for at all.
+
+**What's asymmetric about reload**: the server's own leaf certificate
+hot-reloads on every handshake (`GetConfigForClient`); so does a client's
+own certificate (`GetClientCertificate`). The CA pool used to verify the
+*peer* is loaded once, client-side, at `LoadMTLS` time — root-of-trust
+material changes far less often than individual leaf certs, and a
+`grpc.ClientConn`'s transport credentials can't be swapped after `Dial`
+without forcing a reconnect anyway, so hot-reloading that pool wouldn't
+take effect on a long-lived connection. If your deployment rotates the
+CA itself, redial rather than expecting `Watch` to pick it up live.
+
+See `pkg/grpcx/mtls_test.go` for this exercised over real TLS sockets
+with real (test-generated) certificates: identity extraction and role
+grants, a server requiring a client cert rejecting one with none,
+rejecting a cert signed by an untrusted CA, and both the manual-`Reload`
+and polling-`Watch` hot-reload paths actually taking effect on a new
+handshake.
+
 ## Client
 
 ```go
@@ -141,10 +223,11 @@ exactly this.)
   and isn't exercised by either example service.
 - **No generic method→action mapping.** See the top of this doc and
   `pkg/grpcx`'s package doc — this is deliberate, not an oversight.
-- **No mTLS / service-identity story.** `grpcx.Dial` connects without TLS
-  by default (fine for same-cluster calls or a mesh that terminates TLS
-  itself); a deployment that needs mutual TLS between services passes its
-  own `grpc.WithTransportCredentials` via `Dial`'s `extraOpts`, and needs
-  its own answer for "what identity does a service present when it calls
-  another service on nobody's behalf" (a cron job, a reconciler) — token
-  forwarding only covers the "acting on this user's behalf" case.
+- **No CA rotation.** The client-side CA pool (for verifying the
+  *server*) is fixed at `LoadMTLS` time, by design — see the mTLS
+  section above. Leaf certificate rotation (the far more common case)
+  is fully hot-reloadable on both sides.
+- **No automatic mTLS↔Cedar role sync.** `TLSConfig.ServiceRoles` is a
+  static map you maintain in Go, the mTLS equivalent of a JWT claim —
+  nothing here integrates with a cert issuer (SPIRE, cert-manager) to
+  derive roles automatically from how a certificate was issued.

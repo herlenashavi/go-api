@@ -76,9 +76,18 @@ type Options struct {
 	// twice; pass a distinct slice only if gRPC and HTTP should report
 	// different readiness criteria.
 	GRPCHealthChecks []health.Check
+	// GRPCMTLS, if set (via grpcx.LoadMTLS), turns on mutual TLS for the
+	// gRPC server: it requires or accepts a client certificate per
+	// TLSConfig.RequireClientCert and places the result in context as an
+	// authn.ServiceIdentity. See docs/grpc.md's mTLS section. Hot
+	// reload (grpcx.MTLSStore.Watch) is not started automatically — spawn
+	// it yourself with whatever interval and logger you want, same as
+	// authz.PolicyStore.WatchAndReload.
+	GRPCMTLS *grpcx.MTLSStore
 	// GRPCServerOptions are appended after go-api's own interceptors/stats
-	// handler — for TLS credentials, keepalive policy, message size
-	// limits, anything pkg/grpcx doesn't cover.
+	// handler (and transport credentials, if GRPCMTLS is set) — for
+	// keepalive policy, message size limits, anything pkg/grpcx doesn't
+	// cover.
 	GRPCServerOptions []grpc.ServerOption
 }
 
@@ -136,7 +145,7 @@ func New(ctx context.Context, opts Options) (*App, error) {
 		JSON:        !cfg.Debug,
 		ServiceName: cfg.ServiceName,
 		Env:         cfg.Env,
-	}, middleware.RequestIDLogFields, authn.LogFields, telemetry.TraceLogFields)
+	}, middleware.RequestIDLogFields, authn.LogFields, authn.ServiceLogFields, telemetry.TraceLogFields)
 
 	tp, err := telemetry.New(ctx, telemetry.Config{
 		ServiceName:    cfg.ServiceName,
@@ -202,6 +211,7 @@ func New(ctx context.Context, opts Options) (*App, error) {
 			TracerProvider: tp.TracerProvider,
 			MeterProvider:  tp.MeterProvider,
 			Verifier:       opts.Verifier,
+			MTLS:           opts.GRPCMTLS,
 			Debug:          cfg.Debug,
 		}, opts.GRPCServerOptions...)
 		grpcx.RegisterHealth(a.GRPCServer, grpcHealthChecks, 2*time.Second)
