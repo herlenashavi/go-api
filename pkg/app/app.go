@@ -21,10 +21,12 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"google.golang.org/grpc"
 
 	"github.com/herlenashavi/go-api/pkg/authn"
 	"github.com/herlenashavi/go-api/pkg/authz"
 	"github.com/herlenashavi/go-api/pkg/config"
+	"github.com/herlenashavi/go-api/pkg/grpcx"
 	"github.com/herlenashavi/go-api/pkg/health"
 	"github.com/herlenashavi/go-api/pkg/logging"
 	"github.com/herlenashavi/go-api/pkg/middleware"
@@ -54,6 +56,30 @@ type Options struct {
 
 	// CSP sets Content-Security-Policy on every response; "" omits it.
 	CSP string
+
+	// GRPCEnabled turns on a gRPC server (pkg/grpcx) alongside the HTTP
+	// one, sharing the same logger, telemetry providers, Verifier, and
+	// graceful-shutdown lifecycle. Register your service implementations
+	// on App.GRPCServer after New returns and before calling
+	// ListenAndServe. See pkg/grpcx's package doc for why authorization
+	// isn't wired automatically the way authentication is.
+	GRPCEnabled bool
+	// GRPCHost/GRPCPort is the gRPC listen address. GRPCPort 0 means
+	// OS-assigned (see App.GRPCAddr) — handy in tests, not something you'd
+	// normally want in a deployed service. GRPCHost defaults to
+	// Config.HTTPHost when empty.
+	GRPCHost string
+	GRPCPort int
+	// GRPCHealthChecks populates the gRPC health service (see
+	// pkg/grpcx.RegisterHealth). Defaults to HealthChecks when nil, so a
+	// service with one set of dependencies doesn't need to list them
+	// twice; pass a distinct slice only if gRPC and HTTP should report
+	// different readiness criteria.
+	GRPCHealthChecks []health.Check
+	// GRPCServerOptions are appended after go-api's own interceptors/stats
+	// handler — for TLS credentials, keepalive policy, message size
+	// limits, anything pkg/grpcx doesn't cover.
+	GRPCServerOptions []grpc.ServerOption
 }
 
 // App is a running service's assembled dependencies plus its router.
@@ -64,20 +90,38 @@ type App struct {
 	Telemetry  *telemetry.Provider
 	Authorizer *authz.Authorizer
 
+	// GRPCServer is non-nil iff Options.GRPCEnabled was true. Register
+	// your generated service implementations on it before calling
+	// ListenAndServe:
+	//
+	//	villainsv1.RegisterVillainServiceServer(application.GRPCServer, villainServer)
+	GRPCServer *grpc.Server
+
 	authMiddleware func(http.Handler) http.Handler
 	server         *http.Server
+	grpcHost       string
+	grpcPort       int
 
-	mu   sync.Mutex
-	addr string
+	mu       sync.Mutex
+	addr     string
+	grpcAddr string
 }
 
-// Addr returns the address the server is actually listening on, including
-// the OS-assigned port when Config.HTTPPort was 0 (handy in tests). Empty
-// until ListenAndServe has started accepting connections.
+// Addr returns the address the HTTP server is actually listening on,
+// including the OS-assigned port when Config.HTTPPort was 0 (handy in
+// tests). Empty until ListenAndServe has started accepting connections.
 func (a *App) Addr() string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.addr
+}
+
+// GRPCAddr is Addr's gRPC-server equivalent. Empty if GRPCEnabled was
+// false, or before ListenAndServe has started accepting connections.
+func (a *App) GRPCAddr() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.grpcAddr
 }
 
 // New assembles an App: logging, OTel tracing/metrics, the default
@@ -144,6 +188,31 @@ func New(ctx context.Context, opts Options) (*App, error) {
 	if opts.Verifier != nil {
 		a.authMiddleware = authn.Middleware(opts.Verifier)
 	}
+
+	if opts.GRPCEnabled {
+		grpcHealthChecks := opts.GRPCHealthChecks
+		if grpcHealthChecks == nil {
+			grpcHealthChecks = opts.HealthChecks
+		}
+
+		a.GRPCServer = grpcx.NewServer(grpcx.Dependencies{
+			Logger:         logger,
+			Tracer:         tp.Tracer,
+			Meter:          tp.Meter,
+			TracerProvider: tp.TracerProvider,
+			MeterProvider:  tp.MeterProvider,
+			Verifier:       opts.Verifier,
+			Debug:          cfg.Debug,
+		}, opts.GRPCServerOptions...)
+		grpcx.RegisterHealth(a.GRPCServer, grpcHealthChecks, 2*time.Second)
+
+		a.grpcHost = opts.GRPCHost
+		if a.grpcHost == "" {
+			a.grpcHost = cfg.HTTPHost
+		}
+		a.grpcPort = opts.GRPCPort
+	}
+
 	return a, nil
 }
 
@@ -196,19 +265,47 @@ func (a *App) ListenAndServe(ctx context.Context) error {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
-	errCh := make(chan error, 1)
-	go func() { errCh <- a.server.Serve(ln) }()
+	errCh := make(chan error, 2) // HTTP and (if enabled) gRPC each report here
+	go func() { errCh <- httpServeErr(a.server.Serve(ln)) }()
 	a.Logger.Info("listening", "addr", a.Addr())
+
+	var grpcLn net.Listener
+	if a.GRPCServer != nil {
+		grpcAddr := fmt.Sprintf("%s:%d", a.grpcHost, a.grpcPort)
+		grpcLn, err = net.Listen("tcp", grpcAddr)
+		if err != nil {
+			_ = a.server.Close()
+			return fmt.Errorf("app: grpc listen on %s: %w", grpcAddr, err)
+		}
+
+		a.mu.Lock()
+		a.grpcAddr = grpcLn.Addr().String()
+		a.mu.Unlock()
+
+		go func() { errCh <- a.GRPCServer.Serve(grpcLn) }()
+		a.Logger.Info("grpc listening", "addr", a.GRPCAddr())
+	}
 
 	select {
 	case err := <-errCh:
-		if err != nil && err != http.ErrServerClosed {
+		if err != nil {
 			return fmt.Errorf("app: serve: %w", err)
 		}
 		return nil
 	case <-ctx.Done():
 		return a.shutdown()
 	}
+}
+
+// httpServeErr normalizes http.Server.Serve's expected "I was asked to
+// shut down" sentinel to nil, matching how grpc.Server.Serve already
+// returns nil on GracefulStop/Stop — so both server kinds can share one
+// error channel and one "any non-nil value here is a real failure" check.
+func httpServeErr(err error) error {
+	if err == http.ErrServerClosed {
+		return nil
+	}
+	return err
 }
 
 func (a *App) shutdown() error {
@@ -219,6 +316,20 @@ func (a *App) shutdown() error {
 	if err := a.server.Shutdown(shutdownCtx); err != nil {
 		return fmt.Errorf("app: graceful shutdown: %w", err)
 	}
+
+	if a.GRPCServer != nil {
+		stopped := make(chan struct{})
+		go func() {
+			a.GRPCServer.GracefulStop()
+			close(stopped)
+		}()
+		select {
+		case <-stopped:
+		case <-shutdownCtx.Done():
+			a.GRPCServer.Stop() // ShutdownTimeoutSeconds elapsed; stop waiting on slow clients
+		}
+	}
+
 	if err := a.Telemetry.Shutdown(shutdownCtx); err != nil {
 		return fmt.Errorf("app: telemetry shutdown: %w", err)
 	}

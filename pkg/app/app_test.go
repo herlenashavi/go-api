@@ -7,10 +7,13 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 
 	"github.com/herlenashavi/go-api/pkg/app"
 	"github.com/herlenashavi/go-api/pkg/authn"
 	"github.com/herlenashavi/go-api/pkg/config"
+	"github.com/herlenashavi/go-api/pkg/grpcx"
+	"github.com/herlenashavi/go-api/pkg/health"
 )
 
 func testConfig() config.Base {
@@ -97,6 +100,78 @@ func TestApp_HealthAndMountedRoutes(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("ListenAndServe did not return after context cancellation")
 	}
+}
+
+// TestApp_GRPCEnabled proves the gRPC server shares App's lifecycle: it
+// starts alongside HTTP, serves real RPCs (the built-in health service,
+// registered automatically from GRPCHealthChecks), and stops gracefully
+// on the same context cancellation — without the test needing to touch
+// pkg/grpcx directly.
+func TestApp_GRPCEnabled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cfg := testConfig()
+	a, err := app.New(ctx, app.Options{
+		Config:      cfg,
+		GRPCEnabled: true,
+		GRPCHost:    "127.0.0.1",
+		GRPCPort:    0, // OS-assigned; see App.GRPCAddr
+		GRPCHealthChecks: []health.Check{
+			{Name: "ok", Checker: func(context.Context) error { return nil }},
+		},
+	})
+	if err != nil {
+		t.Fatalf("app.New: %v", err)
+	}
+	if a.GRPCServer == nil {
+		t.Fatal("expected App.GRPCServer to be set when GRPCEnabled is true")
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- a.ListenAndServe(ctx) }()
+
+	_ = waitForAddr(t, a) // ensures ListenAndServe has started before we probe GRPCAddr
+	grpcAddr := waitForGRPCAddr(t, a)
+
+	conn, err := grpcx.Dial(grpcAddr, grpcx.Dependencies{})
+	if err != nil {
+		t.Fatalf("grpcx.Dial: %v", err)
+	}
+	defer conn.Close()
+
+	checkCtx, checkCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer checkCancel()
+	resp, err := healthpb.NewHealthClient(conn).Check(checkCtx, &healthpb.HealthCheckRequest{})
+	if err != nil {
+		t.Fatalf("grpc health Check: %v", err)
+	}
+	if resp.Status != healthpb.HealthCheckResponse_SERVING {
+		t.Fatalf("status = %v, want SERVING", resp.Status)
+	}
+
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("ListenAndServe returned error on shutdown: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("ListenAndServe did not return after context cancellation (gRPC GracefulStop hung?)")
+	}
+}
+
+func waitForGRPCAddr(t *testing.T, a *app.App) string {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if addr := a.GRPCAddr(); addr != "" {
+			return addr
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("server never reported a grpc listen address")
+	return ""
 }
 
 func waitForAddr(t *testing.T, a *app.App) string {

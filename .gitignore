@@ -4,3 +4,10 @@
 .env
 .env.local
 coverage.*
+
+# `go build ./examples/<name>/...` run from the repo root writes a binary
+# named after the package here when the pattern matches exactly one main
+# package — these are build artifacts of the example services, not
+# anything to commit.
+/heroes
+/villains

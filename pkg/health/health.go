@@ -40,7 +40,10 @@ type Config struct {
 	MetricsHandler http.Handler
 }
 
-type checkResult struct {
+// CheckResult is one Check's outcome, as reported by both Router's
+// /readiness endpoint and grpcx's gRPC health service — both call Run, so
+// a dependency failure looks identical over HTTP and gRPC.
+type CheckResult struct {
 	Name    string `json:"name"`
 	Healthy bool   `json:"healthy"`
 	Error   string `json:"error,omitempty"`
@@ -48,7 +51,7 @@ type checkResult struct {
 
 type readinessResponse struct {
 	Status string        `json:"status"`
-	Checks []checkResult `json:"checks,omitempty"`
+	Checks []CheckResult `json:"checks,omitempty"`
 }
 
 // Router returns a chi.Router exposing:
@@ -71,16 +74,11 @@ func Router(cfg Config) chi.Router {
 	})
 
 	r.Get("/readiness", func(w http.ResponseWriter, r *http.Request) {
-		results := runChecks(r.Context(), cfg.Checks, timeout)
+		healthy, results := Run(r.Context(), cfg.Checks, timeout)
 
-		status := http.StatusOK
-		overall := "healthy"
-		for _, res := range results {
-			if !res.Healthy {
-				status = http.StatusServiceUnavailable
-				overall = "unhealthy"
-				break
-			}
+		status, overall := http.StatusOK, "healthy"
+		if !healthy {
+			status, overall = http.StatusServiceUnavailable, "unhealthy"
 		}
 		writeJSON(w, status, readinessResponse{Status: overall, Checks: results})
 	})
@@ -92,17 +90,21 @@ func Router(cfg Config) chi.Router {
 	return r
 }
 
-// runChecks runs every Check concurrently and returns once all of them have
-// either reported a result or hit timeout — whichever is sooner, per check.
-// It deliberately does not sync.WaitGroup.Wait() on the checker goroutines
-// themselves: if a Checker ignores context cancellation and blocks forever,
-// waiting for it to actually return would defeat the timeout entirely. Each
-// goroutine instead reports to a buffered channel it owns, so a late (or
-// never) result has somewhere to land without blocking anything — the
-// goroutine may leak until its underlying call unblocks, but the readiness
-// handler is never held hostage by it.
-func runChecks(ctx context.Context, checks []Check, timeout time.Duration) []checkResult {
-	results := make([]checkResult, len(checks))
+// Run runs every Check concurrently and returns once all of them have
+// either reported a result or hit timeout — whichever is sooner, per check
+// — plus whether every one was healthy. It deliberately does not
+// sync.WaitGroup.Wait() on the checker goroutines themselves: if a Checker
+// ignores context cancellation and blocks forever, waiting for it to
+// actually return would defeat the timeout entirely. Each goroutine
+// instead reports to a buffered channel it owns, so a late (or never)
+// result has somewhere to land without blocking anything — the goroutine
+// may leak until its underlying call unblocks, but the caller (Router's
+// /readiness, or grpcx's gRPC health service) is never held hostage by it.
+func Run(ctx context.Context, checks []Check, timeout time.Duration) (healthy bool, results []CheckResult) {
+	if timeout <= 0 {
+		timeout = 2 * time.Second
+	}
+	results = make([]CheckResult, len(checks))
 	// wg tracks only the *watcher* goroutines below, each of which is
 	// bounded by timeout by construction — never the Checker goroutines
 	// they watch, which are not waited on at all (see doc comment).
@@ -111,14 +113,14 @@ func runChecks(ctx context.Context, checks []Check, timeout time.Duration) []che
 
 	for i, c := range checks {
 		i, c := i, c
-		resultCh := make(chan checkResult, 1)
+		resultCh := make(chan CheckResult, 1)
 
 		go func() {
 			checkCtx, cancel := context.WithTimeout(ctx, timeout)
 			defer cancel()
 
 			err := c.Checker(checkCtx)
-			res := checkResult{Name: c.Name, Healthy: err == nil}
+			res := CheckResult{Name: c.Name, Healthy: err == nil}
 			if err != nil {
 				res.Error = err.Error()
 			}
@@ -131,13 +133,21 @@ func runChecks(ctx context.Context, checks []Check, timeout time.Duration) []che
 			case res := <-resultCh:
 				results[i] = res
 			case <-time.After(timeout):
-				results[i] = checkResult{Name: c.Name, Healthy: false, Error: "check timed out"}
+				results[i] = CheckResult{Name: c.Name, Healthy: false, Error: "check timed out"}
 			}
 		}()
 	}
 
 	wg.Wait() // bounded: every watcher above returns within timeout
-	return results
+
+	healthy = true
+	for _, res := range results {
+		if !res.Healthy {
+			healthy = false
+			break
+		}
+	}
+	return healthy, results
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

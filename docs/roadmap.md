@@ -46,10 +46,13 @@ Each of these is a real, known gap, not an oversight:
   all — request/response shapes are real Go types, but nothing walks them
   into a spec yet. That's the prerequisite for a generated client, not
   just the client itself.
-- **gRPC alongside HTTP.** Not discussed; would need its own interceptor
-  chain mirroring `pkg/middleware`, and a decision on whether
-  authz/authn concepts (Principal, Cedar actions) carry over as-is or need
-  a gRPC-specific mapping.
+- **gRPC streaming and mTLS.** `pkg/grpcx` (added for interservice
+  communication — see `docs/grpc.md`) covers unary RPCs and
+  bearer-token auth/token-forwarding only. A streaming RPC needs its own
+  interceptor wired via `grpc.StreamInterceptor`; mutual TLS between
+  services, and a service-identity story for calls not made on a specific
+  user's behalf (a cron job, a reconciler), are both unaddressed —
+  `grpcx.Dial` connects without TLS by default.
 
 ## Known limitations worth stating plainly
 

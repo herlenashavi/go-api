@@ -2,9 +2,11 @@
 
 A small "heroes" API exercising every piece of go-api: config, structured
 logging, tracing/metrics, authentication, Cedar-based RBAC+ABAC
-authorization, generic CRUD, and one hand-written non-CRUD route. Runs
-with **no external dependencies** — in-memory store, HMAC-signed dev
-tokens instead of a real IdP.
+authorization, generic CRUD, a hand-written non-CRUD route, and — calling
+`examples/villains` — interservice gRPC (`pkg/grpcx`). Runs with **no
+external dependencies** on its own — in-memory store, HMAC-signed dev
+tokens instead of a real IdP — though the `/nemesis` route below needs
+`examples/villains` running too.
 
 ## Run it
 
@@ -63,6 +65,28 @@ curl -s -X POST localhost:8080/v1/heroes/$ID/retire -H "Authorization: Bearer $A
 # second call: 403 — policies/heroes.cedar's `forbid ... when { resource.status == "retired" }`
 ```
 
+The nemesis route — heroes calling villains over gRPC (start
+`examples/villains` first; `VILLAINS_GRPC_ADDR` defaults to
+`localhost:9091`):
+
+```shell
+VID=$(grpcurl -plaintext -H "authorization: Bearer $ADMIN" \
+  -d '{"name":"Lex Luthor","evilPower":"intellect"}' \
+  localhost:9091 villains.v1.VillainService/CreateVillain | jq -r .villain.id)
+
+curl -s -X POST localhost:8080/v1/heroes/ -H "Authorization: Bearer $ADMIN" \
+  -d "{\"name\":\"Superman\",\"superPower\":\"flight\",\"nemesisVillainId\":\"$VID\"}"
+
+HID=$(curl -s localhost:8080/v1/heroes/ -H "Authorization: Bearer $ADMIN" | jq -r '.data[0].id')
+curl -s localhost:8080/v1/heroes/$HID/nemesis -H "Authorization: Bearer $ADMIN"
+# {"heroId":"...","heroName":"Superman","villain":{"id":"...","name":"Lex Luthor",...}}
+```
+
+Villains' own access log shows the *same* request ID this curl call
+generated — `villains_client.go`'s `grpcx.Dial` forwards it, and the
+caller's bearer token, automatically. See
+[docs/grpc.md](../../docs/grpc.md).
+
 Health and metrics:
 
 ```shell
@@ -80,6 +104,8 @@ curl -s localhost:8080/health/metrics | grep http_server
 | `store_memory.go` | A `crud.Store[Hero, CreateHero, UpdateHero]` implementation with zero dependencies |
 | `store_pg.go` | The same interface backed by real `dbx`/pgx — **not wired up**, a reference for swapping stores |
 | `retire.go` | A hand-written route + row-level ABAC check (loads the row, then calls `Authorizer.Check` with its real attributes) |
+| `villains_client.go` | `pkg/grpcx.Dial`-based client for the villains service — tracing, request ID, and token forwarding |
+| `nemesis.go` | The HTTP route that calls villains over gRPC; maps its errors via `grpcx.Problem` |
 | `dev_token.go` | Debug-only token minting — never do this in a real service |
 | `policies/heroes.cedar` | The actual Cedar policies enforced above |
 
