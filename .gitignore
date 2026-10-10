@@ -13,8 +13,8 @@ coverage.*
 /villains
 /gencerts
 
-# Tilt's local_resource build output (see Tiltfile, docs/tilt-dev.md).
-/deploy/tilt/bin/
+# Tilt's local_resource build output (see examples/Tiltfile, docs/tilt-dev.md).
+/examples/deploy/tilt/bin/
 
 # Dev certs from `go run ./deploy/mtls/gencerts` (see docs/grpc.md's mTLS
 # section) — generated locally, never committed.

@@ -8,7 +8,7 @@ import (
 	"syscall"
 	"time"
 
-	villainsv1 "github.com/herlenashavi/go-api/gen/villains/v1"
+	villainsv1 "github.com/herlenashavi/go-api/examples/villains/gen/villains/v1"
 	"github.com/herlenashavi/go-api/pkg/app"
 	"github.com/herlenashavi/go-api/pkg/authn"
 	"github.com/herlenashavi/go-api/pkg/authz"
@@ -24,7 +24,7 @@ import (
 // isn't configured (cfg.MTLS all empty) — entirely opt-in, so `go run .`
 // keeps working with zero setup. Generate dev certs with:
 //
-//	go run ./deploy/mtls/gencerts
+//	go run ./deploy/mtls/gencerts -service heroes -service villains
 //
 // and set the three env vars it prints to turn this on.
 //

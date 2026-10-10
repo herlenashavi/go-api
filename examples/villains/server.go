@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 
-	villainsv1 "github.com/herlenashavi/go-api/gen/villains/v1"
+	villainsv1 "github.com/herlenashavi/go-api/examples/villains/gen/villains/v1"
 	"github.com/herlenashavi/go-api/pkg/authn"
 	"github.com/herlenashavi/go-api/pkg/authz"
 	"github.com/herlenashavi/go-api/pkg/grpcx"

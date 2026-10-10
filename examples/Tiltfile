@@ -6,7 +6,14 @@
 # live in docs/tilt-dev.md; the short version:
 #
 #   minikube start --container-runtime=docker
-#   tilt up
+#   cd examples && tilt up   # or: make tilt-up
+#
+# This Tiltfile lives under examples/ (not the repo root) because
+# everything it orchestrates — the k8s manifests, the Tilt-only dev
+# Dockerfiles, the two example services themselves — is example-app
+# specific, not go-api framework code; see docs/tilt-dev.md. All paths
+# below are relative to this file's own directory (examples/) unless a
+# local_resource's explicit dir='..' says otherwise.
 #
 # The --container-runtime=docker flag matters: it's what lets Tilt build
 # straight into minikube's own Docker daemon with no registry push. See
@@ -20,7 +27,8 @@
 # 1. Fast iteration for a compiled binary. Rebuilding a Docker image on
 #    every save is slow for Go — most of that time is the compiler, not
 #    Docker. So each service is built in two stages: local_resource runs
-#    `go build` on the host (fast, uses your normal build cache), and
+#    `go build` on the host (fast, uses your normal build cache, and
+#    dir='..' so it runs from the repo root where go.mod lives), and
 #    docker_build_with_restart (the tilt-extensions `restart_process`
 #    helper — plain live_update `restart_container()` is deprecated for
 #    k8s resources as of the Tilt version this was written against)
@@ -70,8 +78,8 @@ data:
 %s
 """ % (name, cedar_file.split("/")[-1], indented))
 
-k8s_yaml(policy_configmap('heroes-policies', 'examples/heroes/policies/heroes.cedar'))
-k8s_yaml(policy_configmap('villains-policies', 'examples/villains/policies/villains.cedar'))
+k8s_yaml(policy_configmap('heroes-policies', 'heroes/policies/heroes.cedar'))
+k8s_yaml(policy_configmap('villains-policies', 'villains/policies/villains.cedar'))
 
 k8s_yaml(['deploy/k8s/villains.yaml', 'deploy/k8s/heroes.yaml'])
 
@@ -79,8 +87,9 @@ k8s_yaml(['deploy/k8s/villains.yaml', 'deploy/k8s/heroes.yaml'])
 
 local_resource(
     'villains-binary',
-    'mkdir -p deploy/tilt/bin && CGO_ENABLED=0 GOOS=linux GOARCH=%s go build -o deploy/tilt/bin/villains ./examples/villains' % GOARCH,
-    deps=['pkg', 'gen', 'examples/villains', 'go.mod', 'go.sum'],
+    'mkdir -p examples/deploy/tilt/bin && CGO_ENABLED=0 GOOS=linux GOARCH=%s go build -o examples/deploy/tilt/bin/villains ./examples/villains' % GOARCH,
+    dir='..',
+    deps=['../pkg', 'villains', '../go.mod', '../go.sum'],
     labels=['build'],
 )
 
@@ -103,8 +112,9 @@ k8s_resource(
 
 local_resource(
     'heroes-binary',
-    'mkdir -p deploy/tilt/bin && CGO_ENABLED=0 GOOS=linux GOARCH=%s go build -o deploy/tilt/bin/heroes ./examples/heroes' % GOARCH,
-    deps=['pkg', 'gen', 'examples/heroes', 'go.mod', 'go.sum'],
+    'mkdir -p examples/deploy/tilt/bin && CGO_ENABLED=0 GOOS=linux GOARCH=%s go build -o examples/deploy/tilt/bin/heroes ./examples/heroes' % GOARCH,
+    dir='..',
+    deps=['../pkg', 'villains', 'heroes', '../go.mod', '../go.sum'],
     labels=['build'],
 )
 

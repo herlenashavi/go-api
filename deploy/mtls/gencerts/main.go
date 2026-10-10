@@ -1,7 +1,9 @@
 // Command gencerts generates a throwaway dev CA and one leaf certificate
-// per named service, for trying mTLS between examples/heroes and
-// examples/villains locally. It is not a certificate management tool —
-// no rotation, no revocation, 24-hour validity — just enough to flip
+// per named service, for trying mTLS between any two (or more) go-api
+// services locally — a generic dev utility, not tied to any particular
+// service's name; pass whichever names your own services use via
+// repeated -service flags. It is not a certificate management tool — no
+// rotation, no revocation, 24-hour validity — just enough to flip
 // MTLS_CERT_FILE/MTLS_KEY_FILE/MTLS_CA_FILE on and see the real thing
 // work, the same spirit as authn.NewHMACVerifier's dev-only token
 // signing. See docs/grpc.md's mTLS section for what a real deployment
@@ -10,6 +12,8 @@
 // Usage:
 //
 //	go run ./deploy/mtls/gencerts -out deploy/mtls/certs -service heroes -service villains
+//
+// At least one -service is required; there is no default service list.
 package main
 
 import (
@@ -50,7 +54,7 @@ func run() error {
 	flag.Parse()
 
 	if len(services) == 0 {
-		services = serviceList{"heroes", "villains"}
+		return fmt.Errorf("gencerts: at least one -service is required (e.g. -service heroes -service villains)")
 	}
 
 	if err := os.MkdirAll(*outDir, 0o755); err != nil {
@@ -82,7 +86,7 @@ func run() error {
 		fmt.Printf("wrote %s, %s\n", certPath, keyPath)
 	}
 
-	fmt.Println("\nTo run heroes and villains with mTLS between them:")
+	fmt.Println("\nTo run these services with mTLS between them:")
 	for _, name := range services {
 		fmt.Printf("  MTLS_CERT_FILE=%s/%s-cert.pem MTLS_KEY_FILE=%s/%s-key.pem MTLS_CA_FILE=%s/ca.pem \\\n",
 			*outDir, name, *outDir, name, *outDir)

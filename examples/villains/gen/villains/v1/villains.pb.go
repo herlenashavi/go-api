@@ -696,7 +696,7 @@ const file_villains_v1_villains_proto_rawDesc = "" +
 	"\n" +
 	"GetVillain\x12\x1e.villains.v1.GetVillainRequest\x1a\x1f.villains.v1.GetVillainResponse\x12V\n" +
 	"\rCreateVillain\x12!.villains.v1.CreateVillainRequest\x1a\".villains.v1.CreateVillainResponse\x12Y\n" +
-	"\x0eCaptureVillain\x12\".villains.v1.CaptureVillainRequest\x1a#.villains.v1.CaptureVillainResponseB;Z9github.com/herlenashavi/go-api/gen/villains/v1;villainsv1b\x06proto3"
+	"\x0eCaptureVillain\x12\".villains.v1.CaptureVillainRequest\x1a#.villains.v1.CaptureVillainResponseBMZKgithub.com/herlenashavi/go-api/examples/villains/gen/villains/v1;villainsv1b\x06proto3"
 
 var (
 	file_villains_v1_villains_proto_rawDescOnce sync.Once

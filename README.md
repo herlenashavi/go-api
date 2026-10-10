@@ -128,7 +128,7 @@ edit/rebuild loop:
 
 ```shell
 minikube start --container-runtime=docker  # see docs/tilt-dev.md for why this flag matters
-tilt up
+cd examples && tilt up   # or: make tilt-up
 ```
 
 See [docs/tilt-dev.md](docs/tilt-dev.md) — it covers the two things

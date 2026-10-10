@@ -5,7 +5,7 @@ import (
 
 	"github.com/google/uuid"
 
-	villainsv1 "github.com/herlenashavi/go-api/gen/villains/v1"
+	villainsv1 "github.com/herlenashavi/go-api/examples/villains/gen/villains/v1"
 )
 
 type nemesisInput struct {
