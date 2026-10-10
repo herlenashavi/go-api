@@ -28,9 +28,17 @@ leg:
    vulnerabilities, in two output formats from the same underlying scan:
    - **SARIF**, uploaded to the repo's Security tab (Code scanning
      alerts) via `github/codeql-action/upload-sarif`. This step is
-     `continue-on-error: true` because code scanning on a **private**
-     repo (this one is) requires GitHub Advanced Security — without it,
-     this step fails harmlessly and the pipeline still goes green.
+     `continue-on-error: true`, and a following `if: always()` step
+     writes its real outcome (`steps.sarif-upload.outcome`, the
+     pre-continue-on-error result) to the job summary — so a failure
+     here is never silent just because the job overall stays green.
+     On **this** repo specifically it does fail: a personal
+     (`User`-owned, not organization-owned) GitHub account can't enable
+     code scanning on a **private** repo at all — GitHub Advanced
+     Security is only purchasable at the organization/enterprise level,
+     so there's no setting here to flip. Moving the repo to an org with
+     GHAS, or making it public, would change that; this workflow needs
+     no changes either way.
    - **A plain table**, uploaded as a downloadable workflow artifact
      (`trivy-report-<service>`) — the deliverable that works regardless
      of GHAS, repo visibility, or anyone's Security-tab permissions.
@@ -56,9 +64,12 @@ there's a registry to push to — not a redesign of this file.
   severities that should block (e.g. `severity: CRITICAL` with
   `exit-code: '1'` as a separate, earlier step, keeping a second
   non-blocking scan at the broader severity range for the full report).
-- **SARIF/Security-tab integration needs GHAS on this private repo.**
-  The table-artifact report is the one guaranteed to produce something
-  readable regardless.
+- **SARIF/Security-tab integration can't work on this repo as currently
+  owned/visible.** Not a config bug — a personal account can't enable
+  GitHub Advanced Security on a private repo, period. The job summary
+  says so plainly on every run where it fails; the table-artifact
+  report is the deliverable guaranteed to produce something readable
+  regardless.
 - **No registry push, by design** (see above) — this pipeline proves an
   image builds and what's in it, not that it's deployable anywhere.
 - **The two example services' own `Dockerfile`s are what's scanned.**
