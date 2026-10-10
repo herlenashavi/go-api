@@ -10,6 +10,11 @@ permissions:
   # Required for the vulnerability-scan job to publish SARIF results to
   # the repo's Security tab (Code scanning alerts).
   security-events: write
+  # codeql-action/upload-sarif calls GET /repos/{owner}/{repo}/actions/runs/{id}
+  # internally (to correlate SARIF results across this run's matrix jobs);
+  # without this it fails with "Resource not accessible by integration"
+  # even though security-events: write is already granted.
+  actions: read
 
 jobs:
   test:
@@ -92,11 +97,25 @@ jobs:
       # complete, green pipeline; the table report below is the
       # guaranteed-to-work deliverable either way.
       - name: Upload SARIF to code scanning
+        id: sarif-upload
         uses: github/codeql-action/upload-sarif@v4.38.3
         continue-on-error: true
         with:
           sarif_file: trivy-${{ matrix.service }}.sarif
           category: trivy-${{ matrix.service }}
+
+      # continue-on-error hides a failed step from the job's pass/fail
+      # status, but not from its logs — this makes the outcome visible
+      # in the run summary too, so "job is green" never quietly means
+      # "and also one optional step inside it silently failed."
+      - name: Note SARIF upload outcome
+        if: always()
+        run: |
+          if [ "${{ steps.sarif-upload.outcome }}" = "success" ]; then
+            echo "✅ SARIF uploaded to the Security tab for \`${{ matrix.service }}\`." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "⚠️ SARIF upload to the Security tab failed for \`${{ matrix.service }}\` (expected on a private repo without GitHub Advanced Security) — see the \`trivy-report-${{ matrix.service }}\` artifact for the vulnerability report instead." >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Scan image (human-readable report)
         uses: aquasecurity/trivy-action@v0.36.0
