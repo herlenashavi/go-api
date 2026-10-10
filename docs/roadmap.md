@@ -19,6 +19,11 @@ they're visible and revisitable, not buried in a chat transcript.
   `Principal.TenantID` field exists and reaches Cedar policies, though
   per-tenant query scoping is still the `Store` implementation's job (see
   `docs/authorization.md`).
+- **Config**: one `config.Base`, loaded once via `config.Load[T]`;
+  extend it by embedding, not by reading extra env vars by hand. See
+  `docs/config.md`, including what moved into `Base` (gRPC listen
+  address, dev JWT secret, mTLS file paths) versus what deliberately
+  stayed out (mTLS `ServiceRoles`, a peer's address) and why.
 
 ## Deferred — phase 2/3
 

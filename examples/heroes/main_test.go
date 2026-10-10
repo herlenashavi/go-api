@@ -23,7 +23,7 @@ import (
 // shipped .cedar file fails this test, not just a developer's first
 // `go run .`.
 func TestHeroesExample_EndToEnd(t *testing.T) {
-	secret := devJWTSecret()
+	secret := []byte("test-secret")
 	verifier := authn.NewHMACVerifier(secret, authn.ClaimsConfig{})
 
 	roles, err := authz.NewRoleRegistry(

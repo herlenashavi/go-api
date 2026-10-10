@@ -5,7 +5,6 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
-	"strconv"
 	"syscall"
 	"time"
 
@@ -18,29 +17,12 @@ import (
 	"github.com/herlenashavi/go-api/pkg/health"
 )
 
-// devJWTSecret mirrors examples/heroes's function of the same name
-// exactly, deliberately: same env var, same default, so a token minted by
-// either service's HMAC verifier is accepted by both. See that function's
-// doc comment in examples/heroes/main.go.
-func devJWTSecret() []byte {
-	if s := os.Getenv("DEV_JWT_SECRET"); s != "" {
-		return []byte(s)
-	}
-	return []byte("dev-secret-change-me")
-}
-
-func grpcPort() int {
-	if s := os.Getenv("GRPC_PORT"); s != "" {
-		if n, err := strconv.Atoi(s); err == nil {
-			return n
-		}
-	}
-	return 9091
-}
-
-// loadMTLS returns nil, nil when mTLS isn't configured — mutual TLS is
-// entirely opt-in for this example, so `go run .` keeps working with
-// zero setup. Generate dev certs with:
+// loadMTLS wraps grpcx.LoadMTLSFromConfig with this service's
+// ServiceRoles: which roles a calling service's identity gets is an
+// authorization decision, the same category as the RoleRegistry below,
+// so it's code here rather than an env var. Returns nil, nil when mTLS
+// isn't configured (cfg.MTLS all empty) — entirely opt-in, so `go run .`
+// keeps working with zero setup. Generate dev certs with:
 //
 //	go run ./deploy/mtls/gencerts
 //
@@ -55,18 +37,8 @@ func grpcPort() int {
 // pkg/authz/authorizer_test.go's CheckService tests and docs/grpc.md's
 // mTLS section for a worked example of authorizing by calling-service
 // identity instead of (or alongside) a forwarded user token.
-func loadMTLS() (*grpcx.MTLSStore, error) {
-	certFile, keyFile, caFile := os.Getenv("MTLS_CERT_FILE"), os.Getenv("MTLS_KEY_FILE"), os.Getenv("MTLS_CA_FILE")
-	if certFile == "" && keyFile == "" && caFile == "" {
-		return nil, nil
-	}
-	return grpcx.LoadMTLS(grpcx.TLSConfig{
-		CertFile:          certFile,
-		KeyFile:           keyFile,
-		CAFile:            caFile,
-		RequireClientCert: os.Getenv("MTLS_REQUIRE_CLIENT_CERT") == "true",
-		ServiceRoles:      map[string][]string{"heroes": {"trusted-caller"}},
-	})
+func loadMTLS(cfg config.MTLSConfig) (*grpcx.MTLSStore, error) {
+	return grpcx.LoadMTLSFromConfig(cfg, map[string][]string{"heroes": {"trusted-caller"}})
 }
 
 func main() {
@@ -95,7 +67,7 @@ func run(ctx context.Context) error {
 		return err
 	}
 
-	verifier := authn.NewHMACVerifier(devJWTSecret(), authn.ClaimsConfig{})
+	verifier := authn.NewHMACVerifier([]byte(cfg.DevJWTSecret), authn.ClaimsConfig{})
 
 	// Same role names as examples/heroes, but this RoleRegistry and
 	// PolicyStore are entirely this service's own — see
@@ -117,7 +89,7 @@ func run(ctx context.Context) error {
 
 	store := NewVillainStore()
 
-	mtls, err := loadMTLS()
+	mtls, err := loadMTLS(cfg.MTLS)
 	if err != nil {
 		return err
 	}
@@ -127,7 +99,6 @@ func run(ctx context.Context) error {
 		Verifier:    verifier,
 		Authorizer:  authorizer,
 		GRPCEnabled: true,
-		GRPCPort:    grpcPort(),
 		GRPCMTLS:    mtls,
 		HealthChecks: []health.Check{
 			{Name: "villain-store", Checker: func(context.Context) error { return nil }},

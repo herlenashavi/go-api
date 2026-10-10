@@ -14,8 +14,46 @@ import (
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 
 	"github.com/herlenashavi/go-api/pkg/authn"
+	"github.com/herlenashavi/go-api/pkg/config"
 	"github.com/herlenashavi/go-api/pkg/grpcx"
 )
+
+// TestLoadMTLSFromConfig_Unset proves the standardized config.MTLSConfig
+// entry point preserves the "all three files empty means mTLS is off"
+// behavior every service's hand-rolled loadMTLS helper used to implement
+// itself — the exact case examples/heroes and examples/villains rely on
+// for `go run .` to keep working with zero setup.
+func TestLoadMTLSFromConfig_Unset(t *testing.T) {
+	store, err := grpcx.LoadMTLSFromConfig(config.MTLSConfig{}, nil)
+	if err != nil {
+		t.Fatalf("LoadMTLSFromConfig: %v", err)
+	}
+	if store != nil {
+		t.Fatal("expected a nil store when config.MTLSConfig is empty")
+	}
+}
+
+// TestLoadMTLSFromConfig_Configured proves the config.MTLSConfig ->
+// grpcx.TLSConfig translation actually loads real cert/key/CA material
+// and carries ServiceRoles through — not just that it returns non-nil.
+func TestLoadMTLSFromConfig_Configured(t *testing.T) {
+	ca := newTestCA(t)
+	certPEM, keyPEM := ca.issue(t, "heroes")
+	certFile, keyFile, caFile := writeCertFiles(t, certPEM, keyPEM, ca.certPEM)
+
+	store, err := grpcx.LoadMTLSFromConfig(config.MTLSConfig{
+		CertFile:          certFile,
+		KeyFile:           keyFile,
+		CAFile:            caFile,
+		RequireClientCert: true,
+	}, map[string][]string{"heroes": {"trusted-caller"}})
+	if err != nil {
+		t.Fatalf("LoadMTLSFromConfig: %v", err)
+	}
+	if store == nil {
+		t.Fatal("expected a non-nil store when config.MTLSConfig is set")
+	}
+}
 
 func parseCertPEM(t *testing.T, certPEM []byte) *x509.Certificate {
 	t.Helper()

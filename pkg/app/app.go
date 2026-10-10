@@ -64,12 +64,6 @@ type Options struct {
 	// ListenAndServe. See pkg/grpcx's package doc for why authorization
 	// isn't wired automatically the way authentication is.
 	GRPCEnabled bool
-	// GRPCHost/GRPCPort is the gRPC listen address. GRPCPort 0 means
-	// OS-assigned (see App.GRPCAddr) — handy in tests, not something you'd
-	// normally want in a deployed service. GRPCHost defaults to
-	// Config.HTTPHost when empty.
-	GRPCHost string
-	GRPCPort int
 	// GRPCHealthChecks populates the gRPC health service (see
 	// pkg/grpcx.RegisterHealth). Defaults to HealthChecks when nil, so a
 	// service with one set of dependencies doesn't need to list them
@@ -215,11 +209,11 @@ func New(ctx context.Context, opts Options) (*App, error) {
 		}, opts.GRPCServerOptions...)
 		grpcx.RegisterHealth(a.GRPCServer, grpcHealthChecks, 2*time.Second)
 
-		a.grpcHost = opts.GRPCHost
+		a.grpcHost = cfg.GRPCHost
 		if a.grpcHost == "" {
 			a.grpcHost = cfg.HTTPHost
 		}
-		a.grpcPort = opts.GRPCPort
+		a.grpcPort = cfg.GRPCPort
 	}
 
 	return a, nil

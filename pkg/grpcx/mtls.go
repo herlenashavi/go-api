@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/herlenashavi/go-api/pkg/config"
 )
 
 // TLSConfig configures mutual TLS for service-to-service calls: a
@@ -90,6 +92,34 @@ func LoadMTLS(cfg TLSConfig) (*MTLSStore, error) {
 		return nil, err
 	}
 	return s, nil
+}
+
+// LoadMTLSFromConfig is LoadMTLS's config.MTLSConfig-driven equivalent —
+// the standardized entry point every service should use instead of
+// hand-rolling its own "read MTLS_CERT_FILE/MTLS_KEY_FILE/MTLS_CA_FILE,
+// treat all-three-empty as off" helper (which examples/heroes and
+// examples/villains both used to do, identically, before this existed).
+// Returns nil, nil when cfg isn't configured — mTLS stays entirely
+// opt-in, so a service that never sets MTLS_* keeps working with zero
+// setup.
+//
+// serviceRoles is passed separately, not sourced from env: which roles a
+// calling service's verified identity gets is an authorization policy
+// decision, the same category as the RoleRegistry a service already
+// defines in code (see authz.NewRoleRegistry) — not a per-deployment env
+// tunable. Pass nil from a pure gRPC client that never verifies incoming
+// peers.
+func LoadMTLSFromConfig(cfg config.MTLSConfig, serviceRoles map[string][]string) (*MTLSStore, error) {
+	if !cfg.Enabled() {
+		return nil, nil
+	}
+	return LoadMTLS(TLSConfig{
+		CertFile:          cfg.CertFile,
+		KeyFile:           cfg.KeyFile,
+		CAFile:            cfg.CAFile,
+		RequireClientCert: cfg.RequireClientCert,
+		ServiceRoles:      serviceRoles,
+	})
 }
 
 // Reload re-reads the cert/key/CA files and atomically swaps in the new
