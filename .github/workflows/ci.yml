@@ -78,7 +78,7 @@ jobs:
       # downloadable build artifact (readable without any GitHub UI, and
       # survives independent of code-scanning settings/permissions).
       - name: Scan image (SARIF, for the Security tab)
-        uses: aquasecurity/trivy-action@0.36.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: go-api/${{ matrix.service }}:ci
           format: sarif
@@ -99,7 +99,7 @@ jobs:
           category: trivy-${{ matrix.service }}
 
       - name: Scan image (human-readable report)
-        uses: aquasecurity/trivy-action@0.36.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: go-api/${{ matrix.service }}:ci
           format: table
