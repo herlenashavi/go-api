@@ -135,12 +135,13 @@ func (s *MemoryHeroStore) Create(_ context.Context, in CreateHero) (Hero, error)
 		status = HeroStatusActive
 	}
 	h := Hero{
-		ID:         uuid.New(),
-		Name:       in.Name,
-		SuperPower: in.SuperPower,
-		Status:     status,
-		CreatedAt:  now,
-		ModifiedAt: now,
+		ID:               uuid.New(),
+		Name:             in.Name,
+		SuperPower:       in.SuperPower,
+		Status:           status,
+		NemesisVillainID: in.NemesisVillainID,
+		CreatedAt:        now,
+		ModifiedAt:       now,
 	}
 	s.mu.Lock()
 	s.heroes[h.ID] = h
@@ -169,6 +170,9 @@ func (s *MemoryHeroStore) Update(_ context.Context, id string, in UpdateHero) (H
 	}
 	if in.Status != nil {
 		h.Status = *in.Status
+	}
+	if in.NemesisVillainID != nil {
+		h.NemesisVillainID = *in.NemesisVillainID
 	}
 	h.ModifiedAt = time.Now().UTC()
 

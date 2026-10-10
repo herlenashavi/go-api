@@ -33,6 +33,7 @@ func Middleware(verifier Verifier) func(http.Handler) http.Handler {
 			}
 
 			ctx := WithPrincipal(r.Context(), principal)
+			ctx = WithRawToken(ctx, token)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}

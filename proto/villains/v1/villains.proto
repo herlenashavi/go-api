@@ -1,0 +1,88 @@
+// The villains service's gRPC contract — intentionally simple: list, get,
+// create, and one state-transition RPC (Capture), mirroring the kind of
+// endpoints the heroes HTTP example exposes over REST. heroes calls this
+// service as a gRPC client (see examples/heroes's villain client usage)
+// to demonstrate go-api's interservice communication patterns (pkg/grpcx).
+syntax = "proto3";
+
+package villains.v1;
+
+option go_package = "github.com/herlenashavi/go-api/gen/villains/v1;villainsv1";
+
+import "google/protobuf/timestamp.proto";
+
+enum ThreatLevel {
+  THREAT_LEVEL_UNSPECIFIED = 0;
+  THREAT_LEVEL_LOW = 1;
+  THREAT_LEVEL_MEDIUM = 2;
+  THREAT_LEVEL_HIGH = 3;
+  THREAT_LEVEL_CRITICAL = 4;
+}
+
+enum VillainStatus {
+  VILLAIN_STATUS_UNSPECIFIED = 0;
+  VILLAIN_STATUS_ACTIVE = 1;
+  VILLAIN_STATUS_CAPTURED = 2;
+  VILLAIN_STATUS_DEFEATED = 3;
+}
+
+message Villain {
+  string id = 1;
+  string name = 2;
+  string evil_power = 3;
+  ThreatLevel threat_level = 4;
+  VillainStatus status = 5;
+  // nemesis_hero_id optionally links back to a Hero.id in the heroes
+  // service — the two services share this id as a plain string; neither
+  // validates it against the other's data, by design (see the README's
+  // note on service boundaries).
+  string nemesis_hero_id = 6;
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Timestamp modified_at = 8;
+}
+
+message ListVillainsRequest {
+  int32 limit = 1;
+  int32 offset = 2;
+  // VILLAIN_STATUS_UNSPECIFIED means "no filter".
+  VillainStatus status_filter = 3;
+}
+
+message ListVillainsResponse {
+  repeated Villain villains = 1;
+  int32 total = 2;
+}
+
+message GetVillainRequest {
+  string id = 1;
+}
+
+message GetVillainResponse {
+  Villain villain = 1;
+}
+
+message CreateVillainRequest {
+  string name = 1;
+  string evil_power = 2;
+  string nemesis_hero_id = 3;
+}
+
+message CreateVillainResponse {
+  Villain villain = 1;
+}
+
+message CaptureVillainRequest {
+  string id = 1;
+  string captured_by_hero_id = 2;
+}
+
+message CaptureVillainResponse {
+  Villain villain = 1;
+}
+
+service VillainService {
+  rpc ListVillains(ListVillainsRequest) returns (ListVillainsResponse);
+  rpc GetVillain(GetVillainRequest) returns (GetVillainResponse);
+  rpc CreateVillain(CreateVillainRequest) returns (CreateVillainResponse);
+  rpc CaptureVillain(CaptureVillainRequest) returns (CaptureVillainResponse);
+}

@@ -30,17 +30,25 @@ type Hero struct {
 	Name       string     `json:"name"`
 	SuperPower string     `json:"superPower"`
 	Status     HeroStatus `json:"status"`
-	CreatedAt  time.Time  `json:"createdAt"`
-	ModifiedAt time.Time  `json:"modifiedAt"`
+	// NemesisVillainID optionally links to a Villain.Id in the villains
+	// service (a separate process, over gRPC — see villains_client.go and
+	// nemesis.go). Neither service validates this ID against the other's
+	// data; it's just a plain string both happen to agree on the meaning
+	// of, which is the point being demonstrated — no shared database, no
+	// foreign key, just an interservice call at read time.
+	NemesisVillainID string    `json:"nemesisVillainId,omitempty"`
+	CreatedAt        time.Time `json:"createdAt"`
+	ModifiedAt       time.Time `json:"modifiedAt"`
 }
 
 // CreateHero is the POST body. No id/timestamps — those are server-assigned,
 // the same exclusion canvass-fastapi's schema_factory achieved by stripping
 // NON_EDITABLE_FIELDS, but here it's just... a smaller struct.
 type CreateHero struct {
-	Name       string     `json:"name" validate:"required"`
-	SuperPower string     `json:"superPower" validate:"required"`
-	Status     HeroStatus `json:"status" validate:"omitempty,oneof=active inactive retired"`
+	Name             string     `json:"name" validate:"required"`
+	SuperPower       string     `json:"superPower" validate:"required"`
+	Status           HeroStatus `json:"status" validate:"omitempty,oneof=active inactive retired"`
+	NemesisVillainID string     `json:"nemesisVillainId"`
 }
 
 // UpdateHero is the PUT/PATCH body. Every field is a pointer so a PATCH can
@@ -50,7 +58,8 @@ type CreateHero struct {
 // directly in the type instead of inferred from what Pydantic decided was
 // "unset".
 type UpdateHero struct {
-	Name       *string     `json:"name"`
-	SuperPower *string     `json:"superPower"`
-	Status     *HeroStatus `json:"status" validate:"omitempty,oneof=active inactive retired"`
+	Name             *string     `json:"name"`
+	SuperPower       *string     `json:"superPower"`
+	Status           *HeroStatus `json:"status" validate:"omitempty,oneof=active inactive retired"`
+	NemesisVillainID *string     `json:"nemesisVillainId"`
 }

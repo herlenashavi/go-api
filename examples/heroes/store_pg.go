@@ -49,11 +49,15 @@ func NewPGHeroStore(pool *dbx.Pool) *PGHeroStore {
 // actually try the swap.
 var _ crud.Store[Hero, CreateHero, UpdateHero] = (*PGHeroStore)(nil)
 
-const heroColumns = "id, name, super_power, status, created_at, modified_at"
+const heroColumns = "id, name, super_power, status, nemesis_villain_id, created_at, modified_at"
 
 func scanHero(row pgx.Row) (Hero, error) {
 	var h Hero
-	err := row.Scan(&h.ID, &h.Name, &h.SuperPower, &h.Status, &h.CreatedAt, &h.ModifiedAt)
+	var nemesisVillainID *string
+	err := row.Scan(&h.ID, &h.Name, &h.SuperPower, &h.Status, &nemesisVillainID, &h.CreatedAt, &h.ModifiedAt)
+	if nemesisVillainID != nil {
+		h.NemesisVillainID = *nemesisVillainID
+	}
 	return h, err
 }
 
@@ -76,10 +80,10 @@ func (s *PGHeroStore) Create(ctx context.Context, in CreateHero) (Hero, error) {
 	// A single INSERT is already atomic in Postgres — no dbx.WithTx
 	// needed here. See CreateWithAudit below for when you do need one.
 	h, err := scanHero(s.pool.QueryRow(ctx,
-		`INSERT INTO heroes (id, name, super_power, status)
-		 VALUES (gen_random_uuid(), $1, $2, $3)
+		`INSERT INTO heroes (id, name, super_power, status, nemesis_villain_id)
+		 VALUES (gen_random_uuid(), $1, $2, $3, $4)
 		 RETURNING `+heroColumns,
-		in.Name, in.SuperPower, status,
+		in.Name, in.SuperPower, status, nullIfEmpty(in.NemesisVillainID),
 	))
 	if err != nil {
 		return Hero{}, fmt.Errorf("create hero: %w", err)
@@ -124,10 +128,11 @@ func (s *PGHeroStore) Update(ctx context.Context, id string, in UpdateHero) (Her
 		   name = COALESCE($2, name),
 		   super_power = COALESCE($3, super_power),
 		   status = COALESCE($4, status),
+		   nemesis_villain_id = COALESCE($5, nemesis_villain_id),
 		   modified_at = now()
 		 WHERE id = $1
 		 RETURNING `+heroColumns,
-		id, in.Name, in.SuperPower, in.Status,
+		id, in.Name, in.SuperPower, in.Status, in.NemesisVillainID,
 	))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -246,4 +251,15 @@ func buildOrderBy(sortFields []crud.SortField) string {
 		return " ORDER BY name ASC"
 	}
 	return " ORDER BY " + strings.Join(parts, ", ")
+}
+
+// nullIfEmpty lets an optional, empty string column round-trip as SQL NULL
+// instead of an empty string — nemesis_villain_id has no row to reference
+// (the two services share no foreign key; see Hero.NemesisVillainID's doc
+// comment), so "no nemesis set" should read back as NULL, not "".
+func nullIfEmpty(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
 }

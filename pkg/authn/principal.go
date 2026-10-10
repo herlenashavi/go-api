@@ -46,6 +46,7 @@ func (p *Principal) HasRole(role string) bool {
 }
 
 type principalKey struct{}
+type rawTokenKey struct{}
 
 // WithPrincipal returns a context carrying p.
 func WithPrincipal(ctx context.Context, p *Principal) context.Context {
@@ -58,6 +59,29 @@ func WithPrincipal(ctx context.Context, p *Principal) context.Context {
 func FromContext(ctx context.Context) (*Principal, bool) {
 	p, ok := ctx.Value(principalKey{}).(*Principal)
 	return p, ok
+}
+
+// WithRawToken returns a context carrying the verified bearer token
+// verbatim, alongside the Principal it was verified into. This exists for
+// interservice calls: a handler that calls another service on the current
+// caller's behalf can forward the same token (via pkg/grpcx's client
+// interceptor) so the downstream service authenticates — and authorizes,
+// if it also uses pkg/authz — as the same principal, rather than needing
+// its own service-to-service credential.
+//
+// Forwarding a user's token to a downstream service is a real trust
+// decision — only do it for services you'd trust with that user's
+// identity anyway, the same as you'd think about forwarding any bearer
+// token. Prefer a distinct service credential for anything that isn't
+// strictly "acting on this specific user's behalf."
+func WithRawToken(ctx context.Context, token string) context.Context {
+	return context.WithValue(ctx, rawTokenKey{}, token)
+}
+
+// RawTokenFromContext returns the token stored by WithRawToken, if any.
+func RawTokenFromContext(ctx context.Context) (string, bool) {
+	t, ok := ctx.Value(rawTokenKey{}).(string)
+	return t, ok
 }
 
 // LogFields is a logging.Fielder: it attaches the caller's subject and
