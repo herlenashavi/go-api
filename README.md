@@ -145,6 +145,15 @@ make test-race    # go test -race ./...
 make vet fmt tidy
 ```
 
+## CI
+
+Every push and PR runs `test` (vet, format check, build, `test -race`)
+then `build-and-scan`: builds each example service's real production
+Docker image and scans it with [Trivy](https://trivy.dev/), publishing
+a vulnerability report as a build artifact (plus the Security tab, on a
+repo with GitHub Advanced Security). No image is pushed to a registry.
+See [docs/ci.md](docs/ci.md).
+
 ## Roadmap
 
 See [docs/roadmap.md](docs/roadmap.md) for what's deliberately deferred
