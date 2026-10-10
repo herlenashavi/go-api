@@ -46,20 +46,26 @@ application.ListenAndServe(ctx)
 | `pkg/health` | Liveness/readiness/metrics endpoints, timeout-bounded dependency checks |
 | `pkg/crud` | Opt-in generic CRUD resource builder on top of a `Store[T, CreateIn, UpdateIn]` interface |
 | `pkg/dbx` | pgx pool + OTel query tracing + explicit, handler-controlled transaction boundary |
-| `pkg/app` | Bootstraps all of the above into one chi router with a sane default middleware chain |
+| `pkg/grpcx` | **Interservice gRPC**: server interceptor chain, client dial helper, gRPC↔`problem.Problem` status mapping — see [docs/grpc.md](docs/grpc.md) |
+| `pkg/app` | Bootstraps all of the above — HTTP and, if enabled, gRPC — into one lifecycle with a sane default middleware/interceptor chain |
 
 ## Quickstart
 
 ```shell
-cd examples/heroes
-go run .
+cd examples/heroes && go run .   # HTTP :8080
+cd examples/villains && go run . # gRPC :9091, HTTP :8081 (health only)
 ```
 
-This runs a complete example — roles, Cedar policies, generic CRUD, a
-hand-written route, and a dev endpoint for minting test tokens — with zero
-external dependencies (in-memory store, HMAC "JWT" for local auth). See
-[examples/heroes/README.md](examples/heroes/README.md) for a full curl
-walkthrough, and [store_pg.go](examples/heroes/store_pg.go) for the
+Two example services, demonstrating interservice communication: heroes
+exposes generic CRUD + Cedar RBAC/ABAC over HTTP, same as before; villains
+exposes list/get/create/capture over **gRPC only** (`pkg/grpcx`), and
+heroes calls it — `GET /v1/heroes/{id}/nemesis` looks up a hero's nemesis
+villain over gRPC, forwarding the caller's request ID and bearer token so
+villains authenticates and authorizes (via its own Cedar policies) as the
+same principal. See [examples/heroes/README.md](examples/heroes/README.md)
+and [examples/villains/README.md](examples/villains/README.md) for full
+walkthroughs, [docs/grpc.md](docs/grpc.md) for the gRPC patterns
+themselves, and [store_pg.go](examples/heroes/store_pg.go) for the
 dbx/pgx-backed shape a real service's store takes.
 
 ## Wire format
@@ -67,6 +73,17 @@ dbx/pgx-backed shape a real service's store takes.
 - Errors: [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) `application/problem+json`, every response carrying `requestId`/`traceId` for support correlation (`pkg/problem`).
 - Bodies: camelCase JSON.
 - Lists: `{"data": [...], "meta": {...}}`, cursor pagination by default with offset (`?offset=&limit=`) as a documented fallback (`pkg/httpx.Page`, `pkg/crud.ListParams`).
+
+## Interservice communication
+
+Services talk to each other over gRPC (`pkg/grpcx`), not HTTP: a server
+with the same observability/auth posture as the HTTP stack (request ID,
+panic recovery, access logging, OTel tracing/metrics via the exact same
+providers, bearer-token authentication), and a client dial helper that
+propagates the calling request's ID and — deliberately, not by accident —
+the caller's own bearer token, so a downstream service's own Cedar
+policies see the same principal rather than a separate service identity.
+See [docs/grpc.md](docs/grpc.md).
 
 ## Authorization
 

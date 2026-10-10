@@ -15,18 +15,31 @@ import (
 	"github.com/herlenashavi/go-api/pkg/authz"
 	"github.com/herlenashavi/go-api/pkg/config"
 	"github.com/herlenashavi/go-api/pkg/crud"
+	"github.com/herlenashavi/go-api/pkg/grpcx"
 	"github.com/herlenashavi/go-api/pkg/health"
 	"github.com/herlenashavi/go-api/pkg/httpx"
 )
 
 // devJWTSecret signs/verifies dev tokens for this example only — see
 // authn.NewHMACVerifier's doc comment for why this is never the production
-// path. Override with HERO_JWT_SECRET if you want a non-default value.
+// path. Shared with examples/villains (same env var, same default) so a
+// token minted here is also accepted there — the two services trust the
+// same dev identity, the way they'd both trust a real IdP's signature in
+// production. Override with DEV_JWT_SECRET if you want a non-default value.
 func devJWTSecret() []byte {
-	if s := os.Getenv("HERO_JWT_SECRET"); s != "" {
+	if s := os.Getenv("DEV_JWT_SECRET"); s != "" {
 		return []byte(s)
 	}
 	return []byte("dev-secret-change-me")
+}
+
+// villainsAddr is where examples/villains' gRPC server listens, by
+// default — override with VILLAINS_GRPC_ADDR if you run it elsewhere.
+func villainsAddr() string {
+	if addr := os.Getenv("VILLAINS_GRPC_ADDR"); addr != "" {
+		return addr
+	}
+	return "localhost:9091"
 }
 
 func main() {
@@ -96,6 +109,21 @@ func run(ctx context.Context) error {
 		return err
 	}
 
+	// --- Interservice: a gRPC client to the villains service. Dialing
+	// doesn't block or fail here even if villains isn't up yet (grpc.NewClient
+	// connects lazily) — the first call to GetVillain is where
+	// unreachability would actually surface, as a grpcx.Problem-mapped
+	// error on whatever request triggered it. ---
+	villains, err := NewVillainsClient(villainsAddr(), grpcx.Dependencies{
+		Logger:         application.Logger,
+		TracerProvider: application.Telemetry.TracerProvider,
+		MeterProvider:  application.Telemetry.MeterProvider,
+	})
+	if err != nil {
+		return err
+	}
+	defer villains.Close()
+
 	heroes := crud.NewResource(crud.Config[Hero, CreateHero, UpdateHero]{
 		ResourceType: "Hero",
 		Store:        store,
@@ -112,6 +140,7 @@ func run(ctx context.Context) error {
 	// crud.NewResource returns a plain chi.Router, so this is just adding
 	// another route to it, not a special integration point.
 	heroes.Post("/{id}/retire", httpx.Handle(retireHandler(store, authorizer, cfg.Debug), cfg.Debug))
+	heroes.Get("/{id}/nemesis", httpx.Handle(nemesisHandler(store, villains), cfg.Debug))
 
 	application.Mount("/v1/heroes", heroes)
 
