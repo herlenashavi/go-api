@@ -10,7 +10,7 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
-	villainsv1 "github.com/herlenashavi/go-api/gen/villains/v1"
+	villainsv1 "github.com/herlenashavi/go-api/examples/villains/gen/villains/v1"
 	"github.com/herlenashavi/go-api/pkg/authn"
 	"github.com/herlenashavi/go-api/pkg/authz"
 	"github.com/herlenashavi/go-api/pkg/grpcx"

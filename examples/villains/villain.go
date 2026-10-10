@@ -9,7 +9,7 @@ package main
 import (
 	"time"
 
-	villainsv1 "github.com/herlenashavi/go-api/gen/villains/v1"
+	villainsv1 "github.com/herlenashavi/go-api/examples/villains/gen/villains/v1"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 

@@ -40,8 +40,9 @@ type Settings struct {
 // certificate against a role map. Returns nil, nil when mTLS isn't
 // configured (cfg.MTLS all empty) — entirely opt-in, so `go run .` keeps
 // working with zero setup. Generate dev certs with
-// `go run ./deploy/mtls/gencerts` and set the three env vars it prints
-// to turn this on; see docs/grpc.md's mTLS section.
+// `go run ./deploy/mtls/gencerts -service heroes -service villains` and
+// set the three env vars it prints to turn this on; see docs/grpc.md's
+// mTLS section.
 func loadMTLS(cfg config.MTLSConfig) (*grpcx.MTLSStore, error) {
 	return grpcx.LoadMTLSFromConfig(cfg, nil)
 }

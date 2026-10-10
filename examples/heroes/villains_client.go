@@ -6,7 +6,7 @@ import (
 
 	"google.golang.org/grpc"
 
-	villainsv1 "github.com/herlenashavi/go-api/gen/villains/v1"
+	villainsv1 "github.com/herlenashavi/go-api/examples/villains/gen/villains/v1"
 	"github.com/herlenashavi/go-api/pkg/grpcx"
 )
 

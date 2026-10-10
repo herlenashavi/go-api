@@ -82,7 +82,7 @@ Mutual TLS is entirely opt-in here — unset, everything above works
 exactly as shown. To turn it on:
 
 ```shell
-go run ./../../deploy/mtls/gencerts   # from this directory; prints the env vars below
+go run ./../../deploy/mtls/gencerts -service heroes -service villains   # from this directory; prints the env vars below
 
 MTLS_CERT_FILE=.../villains-cert.pem MTLS_KEY_FILE=.../villains-key.pem \
 MTLS_CA_FILE=.../ca.pem MTLS_REQUIRE_CLIENT_CERT=true \
@@ -107,5 +107,6 @@ without `-cert`/`-key` flags to see the difference. See
 | `policies/villains.cedar` | RBAC (list/read/create/capture by role) + one ABAC forbid (can't capture twice) |
 | `main.go`'s `loadMTLS` | Opt-in mutual TLS — see "Trying mTLS" above |
 
-The proto contract lives at the repo root: `proto/villains/v1/villains.proto`,
-generated into `gen/villains/v1/` via `buf generate` (see `docs/grpc.md`).
+The proto contract lives right here: `proto/villains/v1/villains.proto`,
+generated into `gen/villains/v1/` via `buf generate` run from this
+directory (see `docs/grpc.md`).

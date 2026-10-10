@@ -6,7 +6,9 @@ local Kubernetes cluster with a fast edit/rebuild loop, using
 [Tilt](https://tilt.dev) against [minikube](https://minikube.sigs.k8s.io).
 This is a demonstration of operating go-api services in a
 Kubernetes-shaped environment, not a new framework feature — nothing in
-`pkg/` changed for this; `deploy/` and the root `Tiltfile` are additive.
+`pkg/` changed for this; `examples/deploy/` and `examples/Tiltfile` are
+additive, and live under `examples/` because all of it is specific to
+these two example services, not shared framework config.
 
 ## Prerequisites
 
@@ -21,7 +23,7 @@ Docker Desktop (or another Docker-compatible daemon) needs to actually be
 
 ```shell
 minikube start --container-runtime=docker
-tilt up
+cd examples && tilt up   # or: make tilt-up
 ```
 
 **`--container-runtime=docker` is not optional.** Tilt's whole
@@ -40,7 +42,7 @@ Build Failed: docker push: pushing image "docker.io/go-api/heroes":
 push access denied, repository does not exist or may require authorization
 ```
 
-This isn't a bug in this repo's Tiltfile or Dockerfiles — the image
+This isn't a bug in this example suite's Tiltfile or Dockerfiles — the image
 *builds* successfully every time; only the push step fails, because
 there's nowhere for it to usefully go. If you hit this on a cluster you
 already created without the flag, the fix is `minikube delete &&
@@ -64,8 +66,8 @@ tokens, creating heroes/villains, the nemesis route, RBAC/ABAC denials —
 works identically against these forwarded ports. The services don't know
 or care that they're in Kubernetes instead of running bare with `go run`.
 
-`tilt down` tears everything down; `minikube delete` removes the cluster
-entirely.
+`cd examples && tilt down` (or `make tilt-down`) tears everything down;
+`minikube delete` removes the cluster entirely.
 
 ## What's actually demonstrated here
 
@@ -75,9 +77,11 @@ Rebuilding a Docker image from source on every save is slow for Go — most
 of that time is the compiler, not Docker. The Tiltfile instead:
 
 1. Runs `go build` **on the host** via `local_resource` (your normal build
-   cache, no container overhead).
+   cache, no container overhead; the command runs with `dir='..'` so it
+   executes from the repo root, where `go.mod` lives, even though the
+   Tiltfile itself is under `examples/`).
 2. Packages *only* that already-built binary into a minimal Alpine image
-   (`deploy/tilt/*.Dockerfile` — **not** the production
+   (`examples/deploy/tilt/*.Dockerfile` — **not** the production
    `examples/*/Dockerfile`, which compile inside Docker as a real pipeline
    would; see those files' doc comments for why the two differ).
 3. On every subsequent save, `live_update` skips the image rebuild
@@ -86,8 +90,8 @@ of that time is the compiler, not Docker. The Tiltfile instead:
    [`restart_process`](https://github.com/tilt-dev/tilt-extensions/tree/master/restart_process)
    extension's `docker_build_with_restart` (plain `restart_container()` is
    deprecated for Kubernetes resources as of the Tilt version this was
-   written against — this repo's Tiltfile found that out by actually
-   running `tilt ci` against it, not from reading docs).
+   written against — this example suite's Tiltfile found that out by
+   actually running `tilt ci` against it, not from reading docs).
 
 Edit a `.go` file under `examples/heroes` or `pkg`, save, and the running
 pod restarts with your change in roughly the time `go build` takes — no
@@ -98,10 +102,10 @@ image rebuild, no `kubectl apply`, no pod reschedule.
 Both services already poll for policy file changes
 (`authz.PolicyStore.WatchAndReload`, wired into `main.go` for exactly this
 demo). Here, `policies/` is a `ConfigMap`-backed volume mount
-(`deploy/k8s/heroes.yaml` / `villains.yaml`), and that `ConfigMap` is
-generated **from the real `.cedar` files' actual content** by the
-Tiltfile (`read_file` + a small indent helper) — there is no copy of the
-policy text living in YAML to drift out of sync.
+(`examples/deploy/k8s/heroes.yaml` / `villains.yaml`), and that
+`ConfigMap` is generated **from the real `.cedar` files' actual content**
+by the Tiltfile (`read_file` + a small indent helper) — there is no copy
+of the policy text living in YAML to drift out of sync.
 
 Edit `examples/heroes/policies/heroes.cedar`, save:
 
@@ -121,18 +125,22 @@ and reacts within one poll interval.)
 
 ## Layout
 
+Everything here is example-app specific, so it all lives under
+`examples/` rather than the repo root:
+
 ```
-Tiltfile                        # orchestrates everything below
-deploy/
-  tilt/
-    heroes.Dockerfile           # dev-loop image: copies a host-built binary
-    villains.Dockerfile         # same, for villains
-    bin/                        # local_resource's build output (gitignored)
-  k8s/
-    namespace.yaml              # go-api-demo namespace
-    secret.yaml                 # shared dev JWT secret (see its own comment)
-    heroes.yaml                 # Deployment + Service
-    villains.yaml               # Deployment + Service
+examples/
+  Tiltfile                  # orchestrates everything below
+  deploy/
+    tilt/
+      heroes.Dockerfile     # dev-loop image: copies a host-built binary
+      villains.Dockerfile   # same, for villains
+      bin/                  # local_resource's build output (gitignored)
+    k8s/
+      namespace.yaml        # go-api-demo namespace
+      secret.yaml           # shared dev JWT secret (see its own comment)
+      heroes.yaml           # Deployment + Service
+      villains.yaml         # Deployment + Service
 ```
 
 The Cedar policy `ConfigMap`s aren't static files here — see §2 above.
@@ -143,12 +151,13 @@ Reviewing or extending this setup without Docker/minikube available doesn't
 block much — these checks don't need either:
 
 ```shell
+cd examples
 tilt ci       # parses and loads the Tiltfile; fails at the cluster-connect
               # step with no cluster configured, which is as far as this
               # validates without one — but a Tiltfile syntax/logic error
               # would fail *before* that point, which is what this catches
 kubeconform deploy/k8s/*.yaml   # validates manifests against the k8s OpenAPI schema
-hadolint deploy/tilt/*.Dockerfile examples/*/Dockerfile
+hadolint deploy/tilt/*.Dockerfile */Dockerfile
 ```
 
 `make tilt-validate` runs all three. This repo's full `tilt up` loop —

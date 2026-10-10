@@ -11,22 +11,27 @@ framework.
 ## Defining the contract
 
 Protobuf + [buf](https://buf.build) generate the Go types and service
-interfaces. The repo root has:
+interfaces. This is entirely owned by `examples/villains` — the one
+example that defines a gRPC contract — not shared framework config, so
+it lives there rather than at the repo root:
 
 ```
-buf.yaml        # module config (proto/ is the one module)
-buf.gen.yaml    # protoc-gen-go + protoc-gen-go-grpc, output to gen/
-proto/villains/v1/villains.proto
-gen/villains/v1/*.pb.go   # generated, committed
+examples/villains/buf.yaml        # module config (proto/ is the one module)
+examples/villains/buf.gen.yaml    # protoc-gen-go + protoc-gen-go-grpc, output to gen/
+examples/villains/proto/villains/v1/villains.proto
+examples/villains/gen/villains/v1/*.pb.go   # generated, committed
 ```
 
 ```shell
 # one-time: go install google.golang.org/protobuf/cmd/protoc-gen-go@latest \
 #                       google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest \
 #                       github.com/bufbuild/buf/cmd/buf@latest
+cd examples/villains
 buf lint      # catches, e.g., an RPC reusing another RPC's response type
 buf generate  # regenerate gen/ after editing a .proto
 ```
+
+A new gRPC example service would define its own `buf.yaml`/`buf.gen.yaml`/`proto/`/`gen/` the same way, under its own `examples/<name>/` directory — there's no shared top-level proto module to add to.
 
 ## Server
 
