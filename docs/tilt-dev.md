@@ -123,6 +123,38 @@ broken when a policy edit doesn't take effect in the first few seconds.
 (Running `go run .` directly, outside Kubernetes, skips steps 1–2 entirely
 and reacts within one poll interval.)
 
+### 3. Postgres & migrations
+
+heroes can run against real Postgres instead of its default in-memory
+store (see [examples/heroes/README.md](../examples/heroes/README.md#running-against-postgres-instead)
+for the schema and `PGHeroStore`, examples/heroes/store_pg.go). Under
+Tilt that's wired up end to end, with no manual step:
+
+1. `deploy/k8s/postgres.yaml` + `postgres-secret.yaml` deploy a
+   single-replica Postgres (disposable, `emptyDir`-backed — see that
+   file's header comment for why that's fine here and wouldn't be in
+   production) and expose it as the `postgres` Service, port-forwarded
+   to `localhost:5432`.
+2. The `heroes-migrate` `local_resource` applies
+   `examples/heroes/migrations/*.sql` against that port-forward by
+   running `examples/heroes/migrate` on the host (`go run`, same
+   fast-iteration reasoning as §1's binary builds) — not a Dockerized
+   k8s `Job`, since a migration this cheap doesn't need one. Tilt's
+   `resource_deps` makes it wait for Postgres's `pg_isready` readiness
+   probe first.
+3. `heroes`'s own `resource_deps` waits on `heroes-migrate` in turn, and
+   its Deployment's `DATABASE_URL` env (from `postgres-secret`'s
+   in-cluster DSN) makes `main.go` construct `PGHeroStore` instead of
+   `MemoryHeroStore` — see `run()` in `examples/heroes/main.go`.
+
+Edit a file under `examples/heroes/migrations/`, save: Tilt reruns
+`heroes-migrate` (it's a tracked dependency) before `heroes` restarts,
+the same ordering guarantee `resource_deps` gives the rest of this setup.
+
+`kubectl exec deploy/postgres -n go-api-demo -- psql -U heroes -d heroes`
+gets you a `psql` shell against the same database, if you want to look
+at the `heroes` / `hero_audit_log` tables directly.
+
 ## Layout
 
 Everything here is example-app specific, so it all lives under
@@ -139,8 +171,13 @@ examples/
     k8s/
       namespace.yaml        # go-api-demo namespace
       secret.yaml           # shared dev JWT secret (see its own comment)
+      postgres-secret.yaml  # dev Postgres credentials + in-cluster DSN
+      postgres.yaml         # Deployment + Service backing heroes's PGHeroStore
       heroes.yaml           # Deployment + Service
       villains.yaml         # Deployment + Service
+  heroes/
+    migrations/              # SQL schema, embedded (go:embed) into migrate/
+    migrate/                 # one-off "apply/roll back migrations" binary
 ```
 
 The Cedar policy `ConfigMap`s aren't static files here — see §2 above.
@@ -167,4 +204,8 @@ cross-service `nemesis` call working end-to-end through the cluster, and
 a `live_update` edit reaching the running pod in ~1 second with zero
 Kubernetes-level restarts — has been run for real against a
 `--container-runtime=docker` minikube cluster; it is not merely inferred
-from the static checks above.
+from the static checks above. Postgres and `heroes-migrate` (§3) were
+confirmed the same way: `postgres` reaches `Running` with `heroes` /
+`hero_audit_log` / `schema_migrations` actually present (`psql \dt`), and
+a hero created through `heroes`'s live HTTP API round-trips through that
+same Postgres pod, not the in-memory store.

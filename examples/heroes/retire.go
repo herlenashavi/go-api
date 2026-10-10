@@ -7,11 +7,24 @@ import (
 
 	"github.com/herlenashavi/go-api/pkg/authn"
 	"github.com/herlenashavi/go-api/pkg/authz"
+	"github.com/herlenashavi/go-api/pkg/crud"
 	"github.com/herlenashavi/go-api/pkg/problem"
 )
 
 type retireInput struct {
 	ID uuid.UUID `path:"id"`
+}
+
+// heroStore is everything main.go's hand-written routes need beyond the
+// generic crud.Store[Hero, CreateHero, UpdateHero] interface. Retire
+// isn't part of that interface — see MemoryHeroStore.Retire's doc
+// comment on why it's a method on the concrete store instead — so both
+// backends (MemoryHeroStore and PGHeroStore) implement it here too,
+// which is what lets retireHandler and nemesisHandler work unchanged
+// whichever one main.go constructs.
+type heroStore interface {
+	crud.Store[Hero, CreateHero, UpdateHero]
+	Retire(ctx context.Context, id uuid.UUID) (Hero, error)
 }
 
 // retireHandler is a hand-written route — the thing crud.Resource is
@@ -24,7 +37,7 @@ type retireInput struct {
 //     so the policy's `resource.status == "retired"` forbid clause has
 //     something to evaluate. Resource's route-level checks never have
 //     this — they run before any row is loaded.
-func retireHandler(store *MemoryHeroStore, authorizer *authz.Authorizer, debug bool) func(ctx context.Context, in *retireInput) (*Hero, error) {
+func retireHandler(store heroStore, authorizer *authz.Authorizer, debug bool) func(ctx context.Context, in *retireInput) (*Hero, error) {
 	return func(ctx context.Context, in *retireInput) (*Hero, error) {
 		principal, ok := authn.FromContext(ctx)
 		if !ok || principal == nil {

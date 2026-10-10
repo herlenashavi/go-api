@@ -39,6 +39,15 @@ spec:
                 secretKeyRef:
                   name: dev-jwt-secret
                   key: DEV_JWT_SECRET
+            # Set at all means main.go constructs PGHeroStore instead of
+            # MemoryHeroStore (see run() in main.go) — the schema it
+            # queries is applied beforehand by the Tiltfile's
+            # heroes-migrate resource, not by this pod on boot.
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: DATABASE_URL
           volumeMounts:
             - name: policies
               mountPath: /app/policies

@@ -1,4 +1,4 @@
-.PHONY: build test test-race vet fmt lint run tidy tilt-up tilt-down tilt-validate
+.PHONY: build test test-race vet fmt lint run tidy tilt-up tilt-down tilt-validate migrate-up migrate-down
 
 build:
 	go build ./...
@@ -21,6 +21,18 @@ tidy:
 # Run the worked example (examples/heroes) with no external dependencies.
 run:
 	cd examples/heroes && go run .
+
+# Apply/roll back heroes' Postgres schema (examples/heroes/migrations)
+# against DATABASE_URL. Not needed under `make tilt-up` — the Tiltfile's
+# heroes-migrate resource already runs this — these are for driving
+# heroes' PGHeroStore by hand, e.g. against a one-off `docker run
+# postgres`. See examples/heroes/README.md's "Running against Postgres
+# instead" section.
+migrate-up:
+	go run ./examples/heroes/migrate up
+
+migrate-down:
+	go run ./examples/heroes/migrate down
 
 # Run both example services in a local Kubernetes cluster. See
 # docs/tilt-dev.md — requires `minikube start --container-runtime=docker`

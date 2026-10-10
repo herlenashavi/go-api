@@ -27,6 +27,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
 	"github.com/herlenashavi/go-api/pkg/crud"
@@ -151,6 +152,26 @@ func (s *PGHeroStore) Delete(ctx context.Context, id string) error {
 		return problem.NotFound("Hero")
 	}
 	return nil
+}
+
+// Retire sets a hero's status to retired. It isn't part of crud.Store —
+// see MemoryHeroStore.Retire's doc comment — but heroStore (retire.go)
+// requires it of every backend main.go can construct, PGHeroStore
+// included.
+func (s *PGHeroStore) Retire(ctx context.Context, id uuid.UUID) (Hero, error) {
+	h, err := scanHero(s.pool.QueryRow(ctx,
+		`UPDATE heroes SET status = 'retired', modified_at = now()
+		 WHERE id = $1
+		 RETURNING `+heroColumns,
+		id.String(),
+	))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Hero{}, problem.NotFound("Hero")
+		}
+		return Hero{}, fmt.Errorf("retire hero: %w", err)
+	}
+	return h, nil
 }
 
 // filterColumns maps each FilterableFields key (set in main.go's

@@ -62,6 +62,39 @@ GOARCH = str(local('go env GOARCH')).strip()
 
 k8s_yaml(['deploy/k8s/namespace.yaml', 'deploy/k8s/secret.yaml'])
 
+# --- Postgres: backs heroes' PGHeroStore (examples/heroes/store_pg.go)
+# once heroes-migrate below has applied examples/heroes/migrations. See
+# deploy/k8s/postgres.yaml's header comment for why this is a
+# single-replica, PVC-less Deployment rather than anything meant to
+# outlive this demo cluster. ---
+
+k8s_yaml(['deploy/k8s/postgres-secret.yaml', 'deploy/k8s/postgres.yaml'])
+
+k8s_resource(
+    'postgres',
+    port_forwards=['5432:5432'],
+    labels=['infra'],
+)
+
+# heroes-migrate applies examples/heroes/migrations against Postgres by
+# running the examples/heroes/migrate binary straight on the host
+# (dir='..', same reason the binary local_resources below do) against
+# the port-forward above — not a Dockerized k8s Job — because the whole
+# point of a local Tilt loop is not waiting on an image build for a
+# step that's one `go run` away. resource_deps on 'postgres' makes Tilt
+# wait for its readinessProbe (pg_isready) first; heroes's own
+# resource_deps on this resource, below, then makes heroes wait on it in
+# turn. The password here matches deploy/k8s/postgres-secret.yaml's
+# POSTGRES_PASSWORD by hand — see that file's header comment.
+local_resource(
+    'heroes-migrate',
+    'DATABASE_URL="postgres://heroes:heroes-dev-password@localhost:5432/heroes?sslmode=disable" go run ./examples/heroes/migrate up',
+    dir='..',
+    deps=['heroes/migrations', '../pkg/dbmigrate'],
+    resource_deps=['postgres'],
+    labels=['build'],
+)
+
 def policy_configmap(name, cedar_file):
     """Builds a ConfigMap manifest embedding cedar_file's current content,
     so the policies a pod sees are always exactly what's on disk right
@@ -130,6 +163,6 @@ docker_build_with_restart(
 k8s_resource(
     'heroes',
     port_forwards=['8080:8080'],
-    resource_deps=['villains'],
+    resource_deps=['villains', 'heroes-migrate'],
     labels=['services'],
 )
