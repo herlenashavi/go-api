@@ -112,11 +112,11 @@ func TestApp_GRPCEnabled(t *testing.T) {
 	defer cancel()
 
 	cfg := testConfig()
+	cfg.GRPCHost = "127.0.0.1"
+	cfg.GRPCPort = 0 // OS-assigned; see App.GRPCAddr
 	a, err := app.New(ctx, app.Options{
 		Config:      cfg,
 		GRPCEnabled: true,
-		GRPCHost:    "127.0.0.1",
-		GRPCPort:    0, // OS-assigned; see App.GRPCAddr
 		GRPCHealthChecks: []health.Check{
 			{Name: "ok", Checker: func(context.Context) error { return nil }},
 		},

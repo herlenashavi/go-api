@@ -30,7 +30,7 @@ application.ListenAndServe(ctx)
 
 | Package | Responsibility |
 |---|---|
-| `pkg/config` | Env-driven settings, embed `config.Base` in your own struct |
+| `pkg/config` | Env-driven settings: one `config.Base`, embed it in your own struct to extend it — see [docs/config.md](docs/config.md) |
 | `pkg/logging` | Always-JSON `log/slog` logging, trace/request-id correlation, and a built-in PII/secret-redacting handler every log line passes through — see [docs/logging.md](docs/logging.md) |
 | `pkg/telemetry` | OTel traces + metrics (OTLP), Prometheus scrape endpoint, RED metrics |
 | `pkg/problem` | RFC 9457 `application/problem+json` error responses |
@@ -62,6 +62,18 @@ and [examples/villains/README.md](examples/villains/README.md) for full
 walkthroughs, [docs/grpc.md](docs/grpc.md) for the gRPC patterns
 themselves, and [store_pg.go](examples/heroes/store_pg.go) for the
 dbx/pgx-backed shape a real service's store takes.
+
+## Configuration
+
+Every service loads settings the same way: one env-driven struct,
+parsed once at startup. `config.Base` covers everything generic
+(listen addresses, log level, timeouts, CORS, OTel, Cedar policy
+directory, mTLS file paths); a service adds its own settings by
+embedding `Base` in its own `Settings` struct, not by reading extra
+env vars by hand — see [docs/config.md](docs/config.md), including why
+that replaced the ad hoc per-service helpers (`devJWTSecret()`,
+`loadMTLS()`, `grpcPort()`) earlier versions of the example services
+used.
 
 ## Wire format
 

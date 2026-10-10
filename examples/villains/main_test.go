@@ -132,7 +132,7 @@ func TestVillainServer_ListFiltersByStatus(t *testing.T) {
 // with a Verifier, RegisterHealth, the real policy file — works over a
 // real socket, not just via direct method calls.
 func TestEndToEndOverRealGRPC(t *testing.T) {
-	secret := devJWTSecret()
+	secret := []byte("test-secret")
 	server := newTestServer(t)
 
 	grpcServer := grpcx.NewServer(grpcx.Dependencies{

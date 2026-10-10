@@ -21,41 +21,29 @@ import (
 	"github.com/herlenashavi/go-api/pkg/httpx"
 )
 
-// devJWTSecret signs/verifies dev tokens for this example only — see
-// authn.NewHMACVerifier's doc comment for why this is never the production
-// path. Shared with examples/villains (same env var, same default) so a
-// token minted here is also accepted there — the two services trust the
-// same dev identity, the way they'd both trust a real IdP's signature in
-// production. Override with DEV_JWT_SECRET if you want a non-default value.
-func devJWTSecret() []byte {
-	if s := os.Getenv("DEV_JWT_SECRET"); s != "" {
-		return []byte(s)
-	}
-	return []byte("dev-secret-change-me")
+// Settings extends config.Base with the one env var this service needs
+// that isn't generic enough to belong in Base itself: which address to
+// dial for its villains gRPC client. This is the standard extension
+// pattern documented on config.Base's own doc comment — every
+// service-specific env var gets a typed, tagged field here, not a
+// hand-rolled os.Getenv helper.
+type Settings struct {
+	config.Base
+
+	// VillainsAddr is where examples/villains' gRPC server listens.
+	VillainsAddr string `env:"VILLAINS_GRPC_ADDR" envDefault:"localhost:9091"`
 }
 
-// loadMTLS returns nil, nil when mTLS isn't configured — entirely
-// opt-in, same reasoning as examples/villains's identical function
-// (which this mirrors exactly, since LoadMTLS's result works equally as
-// Dependencies.MTLS for a server or, here, a client — see
-// grpcx.Dial). Generate dev certs with `go run ./deploy/mtls/gencerts`
-// and set the three env vars it prints to turn this on; see
-// docs/grpc.md's mTLS section.
-func loadMTLS() (*grpcx.MTLSStore, error) {
-	certFile, keyFile, caFile := os.Getenv("MTLS_CERT_FILE"), os.Getenv("MTLS_KEY_FILE"), os.Getenv("MTLS_CA_FILE")
-	if certFile == "" && keyFile == "" && caFile == "" {
-		return nil, nil
-	}
-	return grpcx.LoadMTLS(grpcx.TLSConfig{CertFile: certFile, KeyFile: keyFile, CAFile: caFile})
-}
-
-// villainsAddr is where examples/villains' gRPC server listens, by
-// default — override with VILLAINS_GRPC_ADDR if you run it elsewhere.
-func villainsAddr() string {
-	if addr := os.Getenv("VILLAINS_GRPC_ADDR"); addr != "" {
-		return addr
-	}
-	return "localhost:9091"
+// loadMTLS wraps grpcx.LoadMTLSFromConfig; nil serviceRoles because this
+// example only ever dials villains as a client (grpcx.Dial) and never
+// runs a gRPC server of its own, so it never verifies an incoming peer
+// certificate against a role map. Returns nil, nil when mTLS isn't
+// configured (cfg.MTLS all empty) — entirely opt-in, so `go run .` keeps
+// working with zero setup. Generate dev certs with
+// `go run ./deploy/mtls/gencerts` and set the three env vars it prints
+// to turn this on; see docs/grpc.md's mTLS section.
+func loadMTLS(cfg config.MTLSConfig) (*grpcx.MTLSStore, error) {
+	return grpcx.LoadMTLSFromConfig(cfg, nil)
 }
 
 func main() {
@@ -84,14 +72,14 @@ func setDefaultEnv(key, value string) {
 }
 
 func run(ctx context.Context) error {
-	cfg, err := config.Load[config.Base]()
+	cfg, err := config.Load[Settings]()
 	if err != nil {
 		return err
 	}
 
 	// --- Authn: dev HMAC verifier. Swap for authn.NewJWTVerifier against
 	// your real IdP's JWKS endpoint in a non-example service. ---
-	verifier := authn.NewHMACVerifier(devJWTSecret(), authn.ClaimsConfig{})
+	verifier := authn.NewHMACVerifier([]byte(cfg.DevJWTSecret), authn.ClaimsConfig{})
 
 	// --- Authz: role hierarchy + Cedar policies from cfg.PolicyDir. ---
 	roles, err := authz.NewRoleRegistry(
@@ -114,7 +102,7 @@ func run(ctx context.Context) error {
 	store := NewMemoryHeroStore()
 
 	application, err := app.New(ctx, app.Options{
-		Config:     cfg,
+		Config:     cfg.Base,
 		Verifier:   verifier,
 		Authorizer: authorizer,
 		HealthChecks: []health.Check{
@@ -137,11 +125,11 @@ func run(ctx context.Context) error {
 	// connects lazily) — the first call to GetVillain is where
 	// unreachability would actually surface, as a grpcx.Problem-mapped
 	// error on whatever request triggered it. ---
-	mtls, err := loadMTLS()
+	mtls, err := loadMTLS(cfg.MTLS)
 	if err != nil {
 		return err
 	}
-	villains, err := NewVillainsClient(villainsAddr(), grpcx.Dependencies{
+	villains, err := NewVillainsClient(cfg.VillainsAddr, grpcx.Dependencies{
 		Logger:         application.Logger,
 		TracerProvider: application.Telemetry.TracerProvider,
 		MeterProvider:  application.Telemetry.MeterProvider,
@@ -178,7 +166,7 @@ func run(ctx context.Context) error {
 
 	if cfg.Debug {
 		dev := chi.NewRouter()
-		dev.Post("/token", httpx.Handle(devTokenHandler(devJWTSecret(), cfg.Debug), cfg.Debug, httpx.WithStatus(http.StatusCreated)))
+		dev.Post("/token", httpx.Handle(devTokenHandler([]byte(cfg.DevJWTSecret), cfg.Debug), cfg.Debug, httpx.WithStatus(http.StatusCreated)))
 		application.MountPublic("/dev", dev)
 		application.Logger.Warn("dev-token endpoint is mounted at POST /dev/token — debug mode only, never enable in production")
 	}

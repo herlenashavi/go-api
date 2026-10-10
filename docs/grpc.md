@@ -32,10 +32,9 @@ buf generate  # regenerate gen/ after editing a .proto
 
 ```go
 application, err := app.New(ctx, app.Options{
-    Config:      cfg,
+    Config:      cfg, // cfg.GRPCPort/cfg.GRPCHost (config.Base, env GRPC_PORT/GRPC_HOST) set the listen address
     Verifier:    verifier,       // same Verifier as the HTTP side, or nil
     GRPCEnabled: true,
-    GRPCPort:    9091,
 })
 villainsv1.RegisterVillainServiceServer(application.GRPCServer, myServer)
 application.ListenAndServe(ctx) // serves HTTP and gRPC together, shuts both down together
@@ -102,6 +101,23 @@ verified by the TLS handshake itself, not an assertion either side could
 fabricate. `pkg/grpcx`'s `TLSConfig`/`MTLSStore` wire this up; the result
 lands in context as `authn.ServiceIdentity`, the mTLS counterpart to
 `authn.Principal`.
+
+The standardized way to load this is `grpcx.LoadMTLSFromConfig`, driven
+by `config.Base.MTLS` (env `MTLS_CERT_FILE`/`MTLS_KEY_FILE`/`MTLS_CA_FILE`/
+`MTLS_REQUIRE_CLIENT_CERT` — see [docs/config.md](config.md)) — it returns
+`nil, nil` when unset, so mTLS stays opt-in with zero setup, the same
+check every service used to hand-roll itself before this existed:
+
+```go
+mtls, err := grpcx.LoadMTLSFromConfig(cfg.MTLS, map[string][]string{
+    "heroes": {"trusted-caller"}, // roles aren't read from the cert — see below
+})
+if err != nil { ... }
+```
+
+Or build a `TLSConfig` directly when the values don't come from
+`config.Base` at all (a secrets manager, a cert issuer's own client
+library):
 
 ```go
 mtls, err := grpcx.LoadMTLS(grpcx.TLSConfig{
