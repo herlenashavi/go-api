@@ -1,8 +1,7 @@
 // Package crud is go-api's opt-in generic CRUD layer: given a Store
 // implementation, Resource mounts list/get/create/update/delete routes with
 // authz enforcement, allowlisted filtering/sorting, and consistent
-// pagination — the part of canvass-fastapi's ModelRouter worth keeping,
-// rebuilt on Go generics instead of a runtime schema_factory().
+// pagination — built on Go generics, with no runtime type synthesis.
 //
 // It is entirely optional: a service that doesn't fit the CRUD shape just
 // writes chi routes and httpx.Handle calls directly (see pkg/httpx) and
@@ -14,9 +13,7 @@ import "context"
 // ListParams carries the parsed, *allowlisted* query parameters for a list
 // request. Resource builds this from the request using the
 // SortableFields/FilterableFields allowlists in Config — a Store
-// implementation never sees a field name that wasn't explicitly permitted,
-// unlike canvass-fastapi's filter_factory, which made every model column
-// filterable via raw getattr().
+// implementation never sees a field name that wasn't explicitly permitted.
 type ListParams struct {
 	Limit   int
 	Offset  int

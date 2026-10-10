@@ -41,10 +41,9 @@ func TestRouter_ReadinessUnhealthyDependency(t *testing.T) {
 	}
 }
 
-// TestRouter_ReadinessBoundsHangingChecker is the regression test for the
-// exact failure mode canvass-fastapi's smtplib/psycopg2 health checks had:
-// a Checker that ignores context cancellation and blocks forever must not
-// be able to hang the readiness endpoint past PerCheckTimeout.
+// TestRouter_ReadinessBoundsHangingChecker is the regression test for a
+// Checker that ignores context cancellation and blocks forever: it must
+// not be able to hang the readiness endpoint past PerCheckTimeout.
 func TestRouter_ReadinessBoundsHangingChecker(t *testing.T) {
 	r := health.Router(health.Config{
 		PerCheckTimeout: 30 * time.Millisecond,

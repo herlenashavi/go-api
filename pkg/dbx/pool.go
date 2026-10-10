@@ -3,8 +3,7 @@
 // is no per-request transaction middleware: whether a request needs a
 // transaction — and whether to commit it — is decided by calling WithTx
 // from inside your handler or repository, never inferred from the
-// eventual HTTP response status the way canvass-fastapi's
-// AsyncSessionMiddleware did it.
+// eventual HTTP response status.
 package dbx
 
 import (

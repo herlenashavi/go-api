@@ -1,6 +1,6 @@
 // Package httpx is go-api's typed handler wrapper — the framework's answer
-// to "how do handlers declare their contract" without adopting a reflection
-// framework the size of FastAPI/Pydantic. A handler is a plain Go function:
+// to "how do handlers declare their contract" without adopting a large
+// reflection-based validation framework. A handler is a plain Go function:
 //
 //	func get(ctx context.Context, in *GetHeroInput) (*GetHeroOutput, error)
 //
@@ -12,10 +12,10 @@
 //		Expand bool      `query:"expand"`
 //	}
 //
-// This is bounded, single-purpose reflection over your own request types —
-// not the runtime model synthesis canvass-fastapi's schema_factory did. It
-// reads tags once per request to populate a few fields; it never generates
-// types, mutates package state, or needs special-cased escape hatches.
+// This is bounded, single-purpose reflection over your own request types.
+// It reads tags once per request to populate a few fields; it never
+// generates types, mutates package state, or needs special-cased escape
+// hatches.
 package httpx
 
 import (

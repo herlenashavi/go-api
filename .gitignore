@@ -11,3 +11,6 @@ coverage.*
 # anything to commit.
 /heroes
 /villains
+
+# Tilt's local_resource build output (see Tiltfile, docs/tilt-dev.md).
+/deploy/tilt/bin/

@@ -1,0 +1,84 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: villains
+  namespace: go-api-demo
+  labels:
+    app: villains
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: villains
+  template:
+    metadata:
+      labels:
+        app: villains
+    spec:
+      containers:
+        - name: villains
+          image: go-api/villains
+          ports:
+            - name: http
+              containerPort: 8081
+            - name: grpc
+              containerPort: 9091
+          env:
+            - name: SERVICE_NAME
+              value: villains-example
+            - name: DEBUG
+              value: "true"
+            - name: HTTP_PORT
+              value: "8081"
+            - name: GRPC_PORT
+              value: "9091"
+            - name: DEV_JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: dev-jwt-secret
+                  key: DEV_JWT_SECRET
+          volumeMounts:
+            - name: policies
+              mountPath: /app/policies
+          livenessProbe:
+            httpGet:
+              path: /health/liveness
+              port: http
+            initialDelaySeconds: 1
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health/readiness
+              port: http
+            initialDelaySeconds: 1
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 32Mi
+            limits:
+              cpu: 250m
+              memory: 128Mi
+      volumes:
+        # Populated from examples/villains/policies/villains.cedar's
+        # actual content by the Tiltfile — see heroes.yaml's equivalent
+        # comment.
+        - name: policies
+          configMap:
+            name: villains-policies
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: villains
+  namespace: go-api-demo
+spec:
+  selector:
+    app: villains
+  ports:
+    - name: http
+      port: 8081
+      targetPort: http
+    - name: grpc
+      port: 9091
+      targetPort: grpc

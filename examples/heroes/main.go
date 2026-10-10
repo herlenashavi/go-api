@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -108,6 +109,13 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+
+	// Poll for policy changes so editing policies/heroes.cedar takes
+	// effect without a restart — in `go run .` that means the local file;
+	// under deploy/tilt it's a ConfigMap-mounted volume kubelet syncs on
+	// its own schedule, which is why the poll interval here matters less
+	// than kubelet's sync period. See docs/tilt-dev.md.
+	go policyStore.WatchAndReload(ctx, 5*time.Second, application.Logger)
 
 	// --- Interservice: a gRPC client to the villains service. Dialing
 	// doesn't block or fail here even if villains isn't up yet (grpc.NewClient

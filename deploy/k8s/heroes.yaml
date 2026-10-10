@@ -1,0 +1,84 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: heroes
+  namespace: go-api-demo
+  labels:
+    app: heroes
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: heroes
+  template:
+    metadata:
+      labels:
+        app: heroes
+    spec:
+      containers:
+        - name: heroes
+          image: go-api/heroes
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: SERVICE_NAME
+              value: heroes-example
+            - name: DEBUG
+              value: "true"
+            - name: HTTP_PORT
+              value: "8080"
+            # Same-namespace short name — Kubernetes DNS resolves this to
+            # the villains Service below without a fully-qualified name.
+            # In a different namespace you'd use
+            # villains.go-api-demo.svc.cluster.local:9091 instead.
+            - name: VILLAINS_GRPC_ADDR
+              value: villains:9091
+            - name: DEV_JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: dev-jwt-secret
+                  key: DEV_JWT_SECRET
+          volumeMounts:
+            - name: policies
+              mountPath: /app/policies
+          livenessProbe:
+            httpGet:
+              path: /health/liveness
+              port: http
+            initialDelaySeconds: 1
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health/readiness
+              port: http
+            initialDelaySeconds: 1
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 32Mi
+            limits:
+              cpu: 250m
+              memory: 128Mi
+      volumes:
+        # Populated from examples/heroes/policies/heroes.cedar's actual
+        # content by the Tiltfile, not duplicated here — see Tiltfile's
+        # top comment and docs/tilt-dev.md for the hot-reload chain this
+        # enables.
+        - name: policies
+          configMap:
+            name: heroes-policies
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: heroes
+  namespace: go-api-demo
+spec:
+  selector:
+    app: heroes
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

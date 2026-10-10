@@ -17,10 +17,9 @@ import (
 // currently reachable. It is called with a context bounded by Router's
 // PerCheckTimeout. A well-behaved Checker returns promptly when ctx is
 // canceled; one that doesn't (a blocking driver call with no context
-// support, like canvass-fastapi's smtplib/psycopg2 health checks) still
-// can't hang the readiness endpoint itself — Router stops waiting at the
-// timeout and reports that check as unhealthy regardless, leaving the
-// still-running goroutine to finish on its own.
+// support) still can't hang the readiness endpoint itself — Router stops
+// waiting at the timeout and reports that check as unhealthy regardless,
+// leaving the still-running goroutine to finish on its own.
 type Checker func(ctx context.Context) error
 
 // Check names a single readiness dependency.
