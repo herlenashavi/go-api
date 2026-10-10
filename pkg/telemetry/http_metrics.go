@@ -10,10 +10,10 @@ import (
 )
 
 // HTTPMetrics are the RED (Rate, Errors, Duration) metrics every go-api
-// service exposes for every route. Unlike canvass-fastapi's equivalent, the
-// path label is always the route *pattern* ("/v1/heroes/{id}"), never the
-// resolved path — so numeric and slug path parameters can't blow up metric
-// cardinality the way raw paths do.
+// service exposes for every route. The path label is always the route
+// *pattern* ("/v1/heroes/{id}"), never the resolved path — so numeric and
+// slug path parameters can't blow up metric cardinality the way raw
+// paths do.
 type HTTPMetrics struct {
 	requestCount metric.Int64Counter
 	duration     metric.Float64Histogram

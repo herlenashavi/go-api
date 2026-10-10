@@ -18,8 +18,7 @@
 // Filtering never interpolates a field name into SQL text: filterColumns
 // maps each allowlisted crud.Filter.Field to its column, so even a Store
 // that (wrongly) trusted an un-validated field name couldn't be used to
-// probe arbitrary columns — this is the exact class of flaw
-// canvass-fastapi's getattr(model, key) filtering had.
+// probe arbitrary columns.
 package main
 
 import (

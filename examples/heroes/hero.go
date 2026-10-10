@@ -12,8 +12,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// HeroStatus mirrors canvass-fastapi's test-dummy-project example, which
-// this service is a spiritual successor to.
+// HeroStatus is the small enum of lifecycle states a Hero can be in.
 type HeroStatus string
 
 const (
@@ -41,9 +40,8 @@ type Hero struct {
 	ModifiedAt       time.Time `json:"modifiedAt"`
 }
 
-// CreateHero is the POST body. No id/timestamps — those are server-assigned,
-// the same exclusion canvass-fastapi's schema_factory achieved by stripping
-// NON_EDITABLE_FIELDS, but here it's just... a smaller struct.
+// CreateHero is the POST body — no id/timestamps, since those are
+// server-assigned.
 type CreateHero struct {
 	Name             string     `json:"name" validate:"required"`
 	SuperPower       string     `json:"superPower" validate:"required"`
@@ -53,10 +51,7 @@ type CreateHero struct {
 
 // UpdateHero is the PUT/PATCH body. Every field is a pointer so a PATCH can
 // send just the fields it's changing; HeroStore.Update only applies the
-// ones that are non-nil — the same partial-update semantics
-// canvass-fastapi got from `model_dump(exclude_unset=True)`, but visible
-// directly in the type instead of inferred from what Pydantic decided was
-// "unset".
+// ones that are non-nil.
 type UpdateHero struct {
 	Name             *string     `json:"name"`
 	SuperPower       *string     `json:"superPower"`

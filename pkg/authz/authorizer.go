@@ -10,11 +10,11 @@ import (
 	"github.com/herlenashavi/go-api/pkg/problem"
 )
 
-// Action is a Cedar action identifier, scoped per API the way canvass's
-// RouterMethod was, but as policy data rather than Go code: "heroes:list",
-// "heroes:read", "heroes:update", etc. Define your own per resource; there
-// is no fixed enum because the whole point is that new APIs add new actions
-// without touching this package.
+// Action is a Cedar action identifier, scoped per API as policy data
+// rather than Go code: "heroes:list", "heroes:read", "heroes:update",
+// etc. Define your own per resource; there is no fixed enum because the
+// whole point is that new APIs add new actions without touching this
+// package.
 type Action string
 
 // EntityTypeAction is the Cedar entity type used for actions.

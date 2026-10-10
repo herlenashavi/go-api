@@ -3,11 +3,11 @@ package middleware
 import "net/http"
 
 // SecurityHeaders adds a conservative set of standard security headers to
-// every response. Unlike canvass-fastapi's version, it does not attempt to
-// hardcode a Content-Security-Policy for a bundled Swagger UI — that CSP is
-// specific to whatever docs UI (if any) a service serves, is brittle to
-// pin by script hash, and belongs in that service's own middleware if it
-// ships interactive docs. Pass csp to set one; "" omits the header.
+// every response. It deliberately does not attempt to hardcode a
+// Content-Security-Policy for a bundled docs UI — that CSP is specific to
+// whatever docs UI (if any) a service serves, is brittle to pin by script
+// hash, and belongs in that service's own middleware if it ships
+// interactive docs. Pass csp to set one; "" omits the header.
 func SecurityHeaders(csp string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

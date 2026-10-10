@@ -19,9 +19,8 @@ type AccessLogConfig struct {
 	Logger *slog.Logger
 	// IgnorePaths skips logging entirely for any request path containing
 	// one of these substrings (e.g. "/health/liveness"). Applied
-	// consistently regardless of log level — canvass-fastapi's equivalent
-	// bypassed this list whenever the logger was in debug mode, which
-	// defeated the point of having an ignore list in the first place.
+	// consistently regardless of log level — a debug-mode logger doesn't
+	// bypass this list, which would defeat the point of having one.
 	IgnorePaths []string
 	// LogRequestBody logs the (redacted) JSON request body at debug level.
 	// Only takes effect for Content-Type: application/json requests whose
