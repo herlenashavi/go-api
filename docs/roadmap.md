@@ -5,7 +5,7 @@ opt-in CRUD, Cedar authz, and one worked example — rather than a long list
 of half-built capabilities. The decisions below were made without
 stopping to ask, where the choice was a reasonable default rather than
 something only the project owner could decide; they're recorded here so
-they're visible and revisitable, not buried in a chat transcript.
+they're visible and revisitable rather than left undocumented.
 
 ## Decisions made (not re-litigated unless you want to)
 
@@ -14,12 +14,11 @@ they're visible and revisitable, not buried in a chat transcript.
   documented fallback. See `pkg/problem`, `pkg/httpx.Page`.
 - **Onboarding**: a worked example (`examples/heroes`) plus docs, plus
   `go-api new` (`cmd/go-api`, see `docs/scaffolding.md`) to generate a new
-  service with authn/authz/Postgres/CRUD wired per flag. Built once
-  `examples/heroes`+`examples/villains` had stopped moving, per the
-  original "build it once the shape has stopped moving" call below —
-  gRPC/mTLS/Tilt manifests/the custom-metrics example/`add resource` are
-  still deferred (see `docs/scaffolding.md`'s "What `new` doesn't do
-  yet").
+  service with authn/authz/Postgres/CRUD wired per flag — built once the
+  shape of `examples/heroes`/`examples/villains` had stopped moving,
+  rather than before. gRPC/mTLS/Tilt manifests/the custom-metrics
+  example/`add resource` are still deferred (see `docs/scaffolding.md`'s
+  "What `new` doesn't do yet").
 - **In scope now**: request timeouts, body-size limits, panic recovery,
   graceful shutdown, CORS, security headers (`pkg/middleware`); the
   `Principal.TenantID` field exists and reaches Cedar policies, though
@@ -40,8 +39,8 @@ they're visible and revisitable, not buried in a chat transcript.
 Each of these is a real, known gap, not an oversight:
 
 - **`go-api add resource X`** — adding a CRUD resource to an *existing*
-  generated service. `go-api new` (done — see `docs/scaffolding.md`)
-  only scaffolds at creation time; `add` would write the same
+  generated service. `go-api new` (see `docs/scaffolding.md`) only
+  scaffolds at creation time; `add` would write the same
   model/store/migration files into a directory the tool didn't create,
   then print (not apply) the two-line `main.go` snippet to wire it in —
   auto-editing existing hand-written source is exactly the kind of magic
@@ -56,7 +55,7 @@ Each of these is a real, known gap, not an oversight:
   `docs/scaffolding.md`.
 - **`-db` as an enum, not a bool.** If a non-Postgres backend (e.g.
   DynamoDB) is ever added, `-db` on `go-api new` needs to become
-  `-db=postgres|dynamo` rather than the current boolean — flagged now so
+  `-db=postgres|dynamo` rather than the current boolean — noted here so
   it isn't a surprise breaking change later; not needed until a second
   backend actually exists.
 - **Transactional outbox + event consumers.** Publishing an event as a
