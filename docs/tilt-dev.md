@@ -60,8 +60,8 @@ curl localhost:8081/health/liveness          # villains
 grpcurl -plaintext localhost:9091 grpc.health.v1.Health/Check
 ```
 
-Everything in [`examples/heroes/README.md`](../examples/heroes/README.md)
-and [`examples/villains/README.md`](../examples/villains/README.md) — minting
+Everything in [`examples/heroes/README.md`](https://github.com/herlenashavi/go-api/blob/main/examples/heroes/README.md)
+and [`examples/villains/README.md`](https://github.com/herlenashavi/go-api/blob/main/examples/villains/README.md) — minting
 tokens, creating heroes/villains, the nemesis route, RBAC/ABAC denials —
 works identically against these forwarded ports. The services don't know
 or care that they're in Kubernetes instead of running bare with `go run`.
@@ -127,8 +127,8 @@ and reacts within one poll interval.)
 
 Both heroes and villains can run against real Postgres instead of their
 default in-memory stores (see
-[examples/heroes/README.md](../examples/heroes/README.md#running-against-postgres-instead)
-/ [examples/villains/README.md](../examples/villains/README.md#running-against-postgres-instead)
+[examples/heroes/README.md](https://github.com/herlenashavi/go-api/blob/main/examples/heroes/README.md#running-against-postgres-instead)
+/ [examples/villains/README.md](https://github.com/herlenashavi/go-api/blob/main/examples/villains/README.md#running-against-postgres-instead)
 for the schemas and `PGHeroStore` / `VillainPGStore`). Under Tilt that's
 wired up end to end, with no manual step:
 

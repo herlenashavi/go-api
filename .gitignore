@@ -19,3 +19,6 @@ coverage.*
 # Dev certs from `go run ./deploy/mtls/gencerts` (see docs/grpc.md's mTLS
 # section) — generated locally, never committed.
 /deploy/mtls/certs/
+
+# `mkdocs build` output (docs.yml rebuilds this in CI; see mkdocs.yml).
+/site/
