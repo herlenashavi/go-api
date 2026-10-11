@@ -10,6 +10,7 @@ func TestParseSpecValidation(t *testing.T) {
 		name          string
 		svc           string
 		module        string
+		monorepo      bool
 		authn         string
 		authz, db     bool
 		cruds         []string
@@ -24,7 +25,7 @@ func TestParseSpecValidation(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			_, err := ParseSpec(c.svc, c.module, "", c.authn, c.authz, c.db, c.cruds, false, false)
+			_, err := ParseSpec(c.svc, c.module, "", c.monorepo, c.authn, c.authz, c.db, c.cruds, false, false)
 			if err == nil {
 				t.Fatalf("expected an error containing %q, got none", c.wantErrSubstr)
 			}
@@ -36,7 +37,7 @@ func TestParseSpecValidation(t *testing.T) {
 }
 
 func TestParseSpecValid(t *testing.T) {
-	spec, err := ParseSpec("orders", "github.com/acme/orders", "", "jwt", true, true, []string{"Order", "LineItem"}, false, false)
+	spec, err := ParseSpec("orders", "github.com/acme/orders", "", false, "jwt", true, true, []string{"Order", "LineItem"}, false, false)
 	if err != nil {
 		t.Fatalf("ParseSpec: %v", err)
 	}
@@ -45,5 +46,23 @@ func TestParseSpecValid(t *testing.T) {
 	}
 	if len(spec.Resources) != 2 || spec.Resources[0].Name != "Order" || spec.Resources[1].Name != "LineItem" {
 		t.Errorf("Resources = %+v", spec.Resources)
+	}
+}
+
+// TestParseSpecMonorepoSkipsModuleRequirement is the one validation rule
+// -monorepo changes: -module is normally required at parse time, but in
+// monorepo mode there's no go.mod to name, so it's left to Plan (which
+// does the actual, filesystem-dependent module detection — see
+// resolveMonorepo) to decide whether an empty Module is fine.
+func TestParseSpecMonorepoSkipsModuleRequirement(t *testing.T) {
+	spec, err := ParseSpec("orders", "", "", true, "hmac", false, false, nil, false, false)
+	if err != nil {
+		t.Fatalf("ParseSpec: %v", err)
+	}
+	if !spec.Monorepo {
+		t.Error("Monorepo = false, want true")
+	}
+	if spec.Module != "" {
+		t.Errorf("Module = %q, want empty (not required in monorepo mode)", spec.Module)
 	}
 }

@@ -24,8 +24,9 @@ func runNew(args []string) error {
 	args = args[1:]
 
 	fs := flag.NewFlagSet("new", flag.ExitOnError)
-	module := fs.String("module", "", "Go module path for the generated service (required)")
+	module := fs.String("module", "", "Go module path for the generated service (required unless -monorepo)")
 	dir := fs.String("dir", "", "target directory (default: ./<name>)")
+	monorepo := fs.Bool("monorepo", false, "generate into the existing module enclosing -dir instead of a new standalone one — no go.mod/.gitignore, Dockerfile/migrate import paths shaped for a repo-root build context")
 	authn := fs.String("authn", "hmac", "authn.Verifier to wire: none, hmac, or jwt")
 	authz := fs.Bool("authz", false, "wire a Cedar authz.Authorizer with a starter policy")
 	db := fs.Bool("db", false, "wire a Postgres dbx.Pool, health check, and migrations")
@@ -38,7 +39,8 @@ func runNew(args []string) error {
 		fmt.Fprint(fs.Output(), `Usage: go-api new <name> -module <path> [flags]
 
 Scaffolds a new service directory: its own go.mod requiring
-github.com/herlenashavi/go-api, wired up per the flags below. See
+github.com/herlenashavi/go-api, wired up per the flags below — or, with
+-monorepo, generated into the module enclosing -dir instead. See
 docs/scaffolding.md for what's generated and what isn't yet
 (gRPC/mTLS/Tilt/the custom-metrics example).
 
@@ -55,7 +57,7 @@ Flags:
 		return fmt.Errorf("unexpected extra argument(s): %v", fs.Args())
 	}
 
-	spec, err := scaffold.ParseSpec(name, *module, *dir, *authn, *authz, *db, cruds, *force, *dryRun)
+	spec, err := scaffold.ParseSpec(name, *module, *dir, *monorepo, *authn, *authz, *db, cruds, *force, *dryRun)
 	if err != nil {
 		return err
 	}
@@ -74,7 +76,11 @@ Flags:
 		fmt.Println("  " + p)
 	}
 	if !spec.DryRun {
-		fmt.Printf("\nNext steps:\n  cd %s\n  go mod tidy   # needs network access to resolve github.com/herlenashavi/go-api\n  go build ./...\n", spec.Dir)
+		if spec.Monorepo {
+			fmt.Printf("\nNext steps: see %s/README.md (first-run instructions differ here since there's no new go.mod).\n", spec.Dir)
+		} else {
+			fmt.Printf("\nNext steps:\n  cd %s\n  go mod tidy   # needs network access to resolve github.com/herlenashavi/go-api\n  go build ./...\n", spec.Dir)
+		}
 	}
 	return nil
 }
