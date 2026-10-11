@@ -43,6 +43,13 @@ go run ./cmd/go-api new <name> -module <path> [-db] [-authz] [-authn none|hmac|j
 
 CI (`.github/workflows/ci.yml`) runs exactly `go vet`, a `gofmt -l` check, `go build`, then `go test -race` — mirror that locally before pushing rather than guessing what it checks.
 
+Developer docs ([herlenashavi.github.io/go-api](https://herlenashavi.github.io/go-api/)) are built from `docs/*.md` + `mkdocs.yml` by `.github/workflows/docs.yml` on every push to `main` that touches `docs/` — there is no separate source to keep in sync, editing a file under `docs/` is the whole change:
+```shell
+pip install mkdocs-material
+mkdocs serve           # live preview at localhost:8000
+mkdocs build --strict  # what CI runs; catches a broken internal link
+```
+
 ## Architecture
 
 **`pkg/app.New` is the composition root.** It wires config, logging, the OTel telemetry pipeline, the default middleware chain (request ID → panic recovery → tracing → RED metrics → access log → timeout → body limit → CORS → security headers), health endpoints, and — if `Options.GRPCEnabled` — a gRPC server, into one `App` with one graceful-shutdown lifecycle. Read `pkg/app/app.go` first; most "how do these packages fit together" questions are answered by what it calls, in what order.

@@ -1,0 +1,58 @@
+site_name: go-api
+site_description: A Go framework for internal/production HTTP + gRPC APIs — observability, structured logging, authn, and Cedar-based authz built in from the start.
+site_url: https://herlenashavi.github.io/go-api/
+repo_url: https://github.com/herlenashavi/go-api
+repo_name: herlenashavi/go-api
+edit_uri: edit/main/docs/
+
+docs_dir: docs
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.sections
+    - navigation.top
+    - navigation.indexes
+    - content.code.copy
+    - content.action.edit
+    - search.suggest
+    - toc.follow
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - tables
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+  - Core:
+      - Configuration: config.md
+      - Logging & PII Redaction: logging.md
+      - Observability: observability.md
+      - Custom Metrics: metrics.md
+      - Authorization: authorization.md
+  - Interservice gRPC: grpc.md
+  - Scaffolding (go-api new): scaffolding.md
+  - Operations:
+      - Local Dev (Tilt + minikube): tilt-dev.md
+      - CI: ci.md
+  - Roadmap: roadmap.md

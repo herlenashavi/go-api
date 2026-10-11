@@ -5,6 +5,8 @@ with observability, structured logging, authentication, and
 [Cedar](https://www.cedarpolicy.com/)-based role/policy authorization built
 in from the start — not bolted on per service.
 
+**📖 [Full documentation](https://herlenashavi.github.io/go-api/)**
+
 ## Design
 
 A service built on go-api is a **server kit** (config, logging, tracing,
