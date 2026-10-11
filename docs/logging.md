@@ -43,17 +43,15 @@ JSON body takes):
    Deliberately *not* included: bare `name` or `ip`. Those are extremely
    common, mostly non-PII field names (`"service name"`, `"bind ip"`),
    and blanket-redacting them would destroy far more debugging value
-   than the occasional PII they'd catch. An actual IP-shaped *value* is
+   than the occasional PII they'd catch. An actual PII-shaped *value* is
    still caught by pattern matching below regardless of which key it's
    under.
 
 2. **Pattern-based.** Every string is scanned for emails, US SSNs
-   (`123-45-6789` form), phone numbers, IPv4 addresses, and payment card
-   numbers — the last validated against a Luhn checksum so an ordinary
-   16-digit order ID or tracking number isn't flagged just for being the
-   right length. A match is masked in place with a marker naming what was
-   found (`[REDACTED_EMAIL]`, `[REDACTED_CREDIT_CARD]`, ...), not deleted
-   outright, so the rest of the message stays readable:
+   (`123-45-6789` form), phone numbers, routable IPv4 addresses, and
+   payment card numbers. A match is masked in place with a marker naming
+   what was found (`[REDACTED_EMAIL]`, `[REDACTED_CREDIT_CARD]`, ...),
+   not deleted outright, so the rest of the message stays readable:
 
    ```
    "contact backup at [REDACTED_EMAIL] if needed"
@@ -65,6 +63,45 @@ JSON body takes):
    writes "oh and by the way the user's email is..." in a log message
    under a field called `note`.
 
+### What pattern matching deliberately leaves alone
+
+A filter that masks your own infrastructure is not a safer filter — it
+just costs you the ability to debug. Two patterns are shaped specifically
+to avoid that, because both were over-matching badly:
+
+- **IPv4 addresses are only masked when globally routable.** Loopback,
+  RFC 1918 private (`10/8`, `172.16/12`, `192.168/16`), link-local,
+  carrier-NAT (`100.64/10`, the range container runtimes hand out),
+  multicast, and the unspecified `0.0.0.0` are infrastructure by
+  definition and identify nobody. Without this, every address go-api's own
+  framework code logs was unreadable — `app.New`'s `listening
+  addr=127.0.0.1:8080`, the pod IP in `grpcx`'s per-RPC `peer` field, a
+  database host inside a DSN. A client address arriving from the internet
+  is public, and still redacted.
+
+- **Payment card numbers need a real issuer prefix, not just a
+  checksum.** Luhn passes roughly one in ten arbitrary digit runs, so
+  "13–19 digits + Luhn" still flagged a trickle of order numbers,
+  microsecond timestamps, and snowflake IDs as cards. A match now also
+  has to carry an ISO/IEC 7812 issuer prefix at a length that issuer
+  actually mints (`pkg/logging/pii.go`'s `cardIINRanges`). This costs no
+  recall: a number failing that check is not one any issuer could have
+  issued.
+
+On top of the range check, a small set of **operational field names** —
+`addr`, `listenAddr`, `host`, `endpoint`, `target`, `cidr`, `version`, and
+similar (see `operationalFieldNames`) — skip pattern matching for their
+string values entirely, covering a service that genuinely binds to a
+public address and version strings that parse as dotted quads (`1.2.3.4`).
+
+That set is narrow on purpose and **excludes keys naming someone else's
+address** — `peer`, `remoteAddr`, `clientIp` are all absent, because a
+public address under one of those is exactly what redaction should catch.
+It also can't open a hole: key-based redaction runs first, so a field in
+both sets stays fully redacted, and only a plain string is exempted — a
+group or map under an operational key is still walked for nested
+sensitive fields.
+
 ### Extending it
 
 ```go
@@ -74,12 +111,22 @@ import "regexp"
 logging.RegisterSensitiveField("internalCaseNumber")
 
 // Add a custom pattern. validate may be nil; pass one when the regex
-// alone over-matches (see the credit-card Luhn check for why).
+// alone over-matches (see the credit-card issuer/Luhn check for why).
 logging.RegisterPIIPattern("employee_id", regexp.MustCompile(`EMP-\d{6}`), nil)
+
+// Exempt one of your own infrastructure fields from pattern matching,
+// for a value an operator needs to read verbatim.
+logging.RegisterOperationalField("shardEndpoint")
 ```
 
-Call both once at startup — they mutate package-level state, the same
+Call all three once at startup — they mutate package-level state, the same
 convention `logging.RedactKeys` (below) already uses.
+
+`RegisterOperationalField` is the one to scope carefully: it removes the
+pattern-based backstop for that key, so point it at keys that genuinely
+hold infrastructure values. It cannot expose a sensitive field (key-based
+redaction runs first), but exempting a key that may carry a user's address
+or phone number does remove the net under it.
 
 ### Why built-in, not opt-in
 
@@ -121,5 +168,7 @@ discipline slips, not a replacement for it.
 
 See `pkg/logging/pii_test.go` for this exercised end-to-end through the
 real JSON-encoding pipeline, including the false-positive-avoidance cases
-(a 16-digit order ID that fails Luhn is left alone; a bare "name"/"ip"
-key is not blanket-redacted).
+(a bare "name"/"ip" key is not blanket-redacted; a private or loopback
+address is left alone; a Luhn-valid order ID with no issuer prefix is left
+alone). `pii_internal_test.go` pins the `routableIPv4`/`cardNumberLike`
+decision boundaries directly.

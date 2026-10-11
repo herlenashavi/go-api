@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/netip"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -71,6 +73,14 @@ func redactAttr(a slog.Attr) slog.Attr {
 	if isSensitiveField(a.Key) {
 		return slog.String(a.Key, "[REDACTED]")
 	}
+	// An operational key's string value is passed through verbatim — see
+	// operationalFieldNames. Only a plain string is exempted: a group or a
+	// map under such a key still gets the full recursive treatment, so a
+	// nested sensitive field can't hide behind an infrastructure-sounding
+	// parent.
+	if v := a.Value.Resolve(); v.Kind() == slog.KindString && isOperationalField(a.Key) {
+		return slog.Attr{Key: a.Key, Value: v}
+	}
 	return slog.Attr{Key: a.Key, Value: redactValue(a.Value)}
 }
 
@@ -109,6 +119,10 @@ func redactAny(v any) any {
 		for k, vv := range val {
 			if isSensitiveField(k) {
 				out[k] = "[REDACTED]"
+				continue
+			}
+			if s, ok := vv.(string); ok && isOperationalField(k) {
+				out[k] = s // see redactAttr: strings only, under an operational key
 				continue
 			}
 			out[k] = redactAny(vv)
@@ -224,6 +238,57 @@ func RegisterSensitiveField(names ...string) {
 	sensitiveFieldNames.add(names...)
 }
 
+// operationalFieldNames are the inverse of sensitiveFieldNames: keys whose
+// value describes the deployment itself — an address something binds to or
+// dials, a hostname, a version string — rather than anything about a
+// person. A *string* value under one of these keys skips pattern-based
+// redaction entirely.
+//
+// This exists because pattern matching has no way to tell
+// "addr":"203.0.113.5:8080" (this process's own listen address, which an
+// operator needs to see) from the same text appearing as a client's
+// address. routableIPv4 already exempts the private and loopback ranges
+// that cover most of those cases; this covers the rest — a service bound
+// to a public address, a version string like "1.2.3.4" that parses as an
+// IPv4 address, a collector endpoint.
+//
+// Membership is narrow on purpose, and specifically excludes the keys that
+// name *someone else's* address — "peer", "remoteAddr", "clientIp" and
+// friends are absent, because a public address under one of those is
+// exactly the case redaction should catch. Key-based redaction is never
+// skipped: a key in both sets is still redacted outright, so this can't be
+// used (or mistakenly extended) to un-redact a sensitive field.
+var operationalFieldNames = newFieldSet(
+	// Addresses this process binds to or reports about itself.
+	"addr", "laddr", "localaddr", "listenaddr", "bindaddr",
+	"serveraddr", "httpaddr", "grpcaddr",
+	// Things it dials or routes to.
+	"host", "hostname", "endpoint", "target", "upstream",
+	// Network topology.
+	"cidr", "subnet", "netmask", "gateway",
+	// Version strings, which can parse as dotted quads ("1.2.3.4").
+	"version", "goversion",
+)
+
+func isOperationalField(key string) bool {
+	return operationalFieldNames.has(key)
+}
+
+// RegisterOperationalField exempts additional field names from
+// pattern-based redaction, for a service whose own infrastructure fields
+// aren't covered by the built-in set (see operationalFieldNames) — say a
+// "shardEndpoint" or "replicaAddr" that an operator needs to read
+// verbatim.
+//
+// It cannot expose a sensitive field: key-based redaction runs first, so a
+// name that is also in sensitiveFieldNames stays fully redacted. Scope it
+// to keys that genuinely hold infrastructure values — exempting a key that
+// may carry a user's address or phone number silently removes the backstop
+// for it. Call once at startup, not per-request; it mutates shared state.
+func RegisterOperationalField(names ...string) {
+	operationalFieldNames.add(names...)
+}
+
 // --- pattern-based redaction --------------------------------------------
 
 // piiPattern is one regex-detectable PII shape. validate, if set, is an
@@ -256,9 +321,9 @@ var patternsMu sync.RWMutex
 var defaultPIIPatterns = []piiPattern{
 	{name: "email", re: emailRE},
 	{name: "ssn", re: ssnRE},
-	{name: "credit_card", re: creditCardRE, validate: luhnValid},
+	{name: "credit_card", re: creditCardRE, validate: cardNumberLike},
 	{name: "phone", re: phoneRE},
-	{name: "ipv4", re: ipv4RE},
+	{name: "ipv4", re: ipv4RE, validate: routableIPv4},
 }
 
 // RegisterPIIPattern adds a custom pattern to the set piiHandler scans
@@ -301,11 +366,121 @@ func redactString(s string) string {
 	return s
 }
 
+// routableIPv4 is ipv4RE's validate hook: it reports whether match is an
+// address that could plausibly identify a *person* rather than a piece of
+// this deployment's own plumbing.
+//
+// Without it, ipv4RE flags every address a service logs about itself —
+// its own listen address ("listening addr=127.0.0.1:8080"), the pod IP of
+// a calling service in a gRPC access log, a database host inside a DSN —
+// leaving operators unable to tell from the logs what a process bound to
+// or who called it. That is a pure loss: a loopback, private, link-local,
+// or carrier-NAT address is infrastructure by definition and identifies
+// nobody, so masking it buys no privacy at all.
+//
+// Globally-routable addresses still mask, including the ranges reserved
+// for documentation (192.0.2.0/24 and friends): those are "public-shaped"
+// and nothing operational logs them, so the conservative choice there
+// costs nothing. A client IP arriving from the internet — the one IPv4
+// value in a log line that genuinely is personal data — is public, and
+// still redacted.
+func routableIPv4(match string) bool {
+	addr, err := netip.ParseAddr(match)
+	if err != nil || !addr.Is4() {
+		return false
+	}
+	if !addr.IsGlobalUnicast() {
+		// Unspecified (0.0.0.0, the default bind address), loopback,
+		// link-local, multicast, and the all-ones broadcast address.
+		return false
+	}
+	if addr.IsPrivate() {
+		return false // RFC 1918: 10/8, 172.16/12, 192.168/16
+	}
+	return !cgnatPrefix.Contains(addr)
+}
+
+// cgnatPrefix is RFC 6598 shared address space — carrier-grade NAT, and
+// the range Kubernetes clusters and container runtimes routinely hand out
+// for pod/service networks. IsPrivate doesn't cover it.
+var cgnatPrefix = netip.MustParsePrefix("100.64.0.0/10")
+
+// cardIINRanges are the issuer-prefix/length combinations real payment
+// cards actually use (ISO/IEC 7812 issuer identification numbers). low/high
+// bound the first prefixLen digits inclusively; lengths are the total digit
+// counts that issuer mints.
+//
+// Luhn alone is not enough of a filter: roughly one in ten arbitrary digit
+// runs passes it by chance, so "13-19 digits + Luhn" still flags a steady
+// trickle of ordinary order numbers, microsecond timestamps, and snowflake
+// IDs as payment cards. Requiring a real IIN prefix *and* a length that
+// issuer actually uses narrows the false-positive surface by roughly
+// another order of magnitude, while costing no recall — a number failing
+// this check is not a card number any issuer could have issued.
+var cardIINRanges = []struct {
+	low, high int
+	prefixLen int
+	lengths   []int
+}{
+	{4, 4, 1, []int{13, 16, 19}},                   // Visa
+	{51, 55, 2, []int{16}},                         // Mastercard
+	{2221, 2720, 4, []int{16}},                     // Mastercard (2-series)
+	{34, 34, 2, []int{15}},                         // American Express
+	{37, 37, 2, []int{15}},                         // American Express
+	{6011, 6011, 4, []int{16, 19}},                 // Discover
+	{644, 649, 3, []int{16, 19}},                   // Discover
+	{65, 65, 2, []int{16, 19}},                     // Discover
+	{300, 305, 3, []int{14}},                       // Diners Club
+	{3095, 3095, 4, []int{14}},                     // Diners Club
+	{36, 36, 2, []int{14}},                         // Diners Club
+	{38, 39, 2, []int{14}},                         // Diners Club
+	{3528, 3589, 4, []int{16, 19}},                 // JCB
+	{62, 62, 2, []int{16, 17, 18, 19}},             // UnionPay
+	{81, 81, 2, []int{16}},                         // RuPay
+	{5018, 5018, 4, []int{12, 13, 14, 15, 16, 19}}, // Maestro
+	{5020, 5020, 4, []int{12, 13, 14, 15, 16, 19}}, // Maestro
+	{5038, 5038, 4, []int{12, 13, 14, 15, 16, 19}}, // Maestro
+	{6304, 6304, 4, []int{12, 13, 14, 15, 16, 19}}, // Maestro
+	{6759, 6763, 4, []int{12, 13, 14, 15, 16, 19}}, // Maestro
+}
+
+// cardNumberLike is creditCardRE's validate hook: a match is treated as a
+// payment card number only if its digits carry a real issuer prefix at a
+// length that issuer uses (see cardIINRanges) *and* pass the Luhn checksum.
+func cardNumberLike(match string) bool {
+	digits := make([]byte, 0, len(match))
+	for i := 0; i < len(match); i++ {
+		if match[i] >= '0' && match[i] <= '9' {
+			digits = append(digits, match[i])
+		}
+	}
+	return plausibleIIN(string(digits)) && luhnValid(string(digits))
+}
+
+// plausibleIIN reports whether digits begins with an issuer prefix that
+// mints numbers of exactly this length.
+func plausibleIIN(digits string) bool {
+	for _, r := range cardIINRanges {
+		if len(digits) < r.prefixLen {
+			continue
+		}
+		prefix, err := strconv.Atoi(digits[:r.prefixLen])
+		if err != nil || prefix < r.low || prefix > r.high {
+			continue
+		}
+		for _, n := range r.lengths {
+			if len(digits) == n {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // luhnValid reports whether the digits in s (any non-digit characters —
 // spaces, dashes — are ignored) pass the Luhn checksum real payment card
-// numbers satisfy, so creditCardRE's otherwise-overbroad "13-19 digits"
-// match doesn't flag arbitrary long numeric IDs, order numbers, or
-// timestamps as card numbers.
+// numbers satisfy. It is one of the two gates cardNumberLike applies; see
+// cardIINRanges for why the checksum on its own isn't selective enough.
 func luhnValid(s string) bool {
 	var digits []int
 	for _, r := range s {
@@ -313,7 +488,7 @@ func luhnValid(s string) bool {
 			digits = append(digits, int(r-'0'))
 		}
 	}
-	if len(digits) < 13 || len(digits) > 19 {
+	if len(digits) < 12 || len(digits) > 19 {
 		return false
 	}
 
