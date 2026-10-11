@@ -1,18 +1,22 @@
-# Multi-stage build for {{.ServiceName}}. Run from this directory:
+{{if .Monorepo}}# Multi-stage build for {{.ServiceName}}. Run from the repo root:
+#   docker build -f {{.RelDir}}/Dockerfile -t {{.ServiceName}} .
+{{else}}# Multi-stage build for {{.ServiceName}}. Run from this directory:
 #   docker build -t {{.ServiceName}} .
-
+{{end}}
 FROM golang:{{.GoVersion}} AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -o /out/{{.ServiceName}} .
-
+{{if .Monorepo}}RUN CGO_ENABLED=0 go build -o /out/{{.ServiceName}} ./{{.RelDir}}
+{{else}}RUN CGO_ENABLED=0 go build -o /out/{{.ServiceName}} .
+{{end}}
 FROM gcr.io/distroless/static-debian12:nonroot
 WORKDIR /app
 COPY --from=build /out/{{.ServiceName}} ./{{.ServiceName}}
-{{if .Authz}}COPY --from=build /src/policies ./policies
-{{end}}
+{{if .Authz}}{{if .Monorepo}}COPY --from=build /src/{{.RelDir}}/policies ./policies
+{{else}}COPY --from=build /src/policies ./policies
+{{end}}{{end}}
 EXPOSE 8080
 ENV HTTP_PORT=8080
 USER nonroot:nonroot

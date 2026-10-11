@@ -37,12 +37,24 @@ type Spec struct {
 	// overridden by --dir), SERVICE_NAME default, and the base for
 	// generated Cedar policy/README text.
 	Name string
-	// Module is the generated go.mod's module path. Always required —
-	// guessing a default (e.g. from $GOPATH or a VCS remote) would be
-	// wrong often enough to not be worth the convenience.
+	// Module is the generated go.mod's module path in standalone mode —
+	// required there, since guessing a default (e.g. from $GOPATH or a
+	// VCS remote) would be wrong often enough to not be worth the
+	// convenience. In -monorepo mode there is no go.mod to name, so this
+	// is optional: left empty, the module enclosing Dir is detected by
+	// walking up to its nearest go.mod; given anyway, it's checked
+	// against that detected module and rejected on a mismatch rather
+	// than silently producing imports for a module Dir isn't actually
+	// inside — see monorepo.go's resolveMonorepo.
 	Module string
 	// Dir is the target directory, created if it doesn't exist.
 	Dir string
+	// Monorepo generates into an existing module (detected from Dir's
+	// position in it) instead of scaffolding a new standalone one: no
+	// go.mod/.gitignore, and the Dockerfile/migrate package import paths
+	// are shaped for a repo-root build context instead of Dir being the
+	// module root. See docs/scaffolding.md.
+	Monorepo bool
 
 	Authn AuthnMode
 	Authz bool
@@ -56,13 +68,16 @@ type Spec struct {
 
 // ParseSpec validates raw flag values into a Spec. It is separate from
 // flag parsing itself (see cmd/go-api/new.go) so the validation rules
-// are testable without going through os.Args.
-func ParseSpec(name, module, dir string, authn string, authz, db bool, cruds []string, force, dryRun bool) (Spec, error) {
+// are testable without going through os.Args. It does no filesystem
+// I/O — monorepo module detection needs that, and happens later, in
+// Plan (see resolveMonorepo), where Generate's dry-run mode can still
+// observe it without writing anything.
+func ParseSpec(name, module, dir string, monorepo bool, authn string, authz, db bool, cruds []string, force, dryRun bool) (Spec, error) {
 	if !serviceNamePattern.MatchString(name) {
 		return Spec{}, fmt.Errorf("service name %q must start with a lowercase letter and contain only lowercase letters, digits, and hyphens", name)
 	}
-	if strings.TrimSpace(module) == "" {
-		return Spec{}, fmt.Errorf("-module is required (e.g. -module github.com/yourorg/%s)", name)
+	if !monorepo && strings.TrimSpace(module) == "" {
+		return Spec{}, fmt.Errorf("-module is required (e.g. -module github.com/yourorg/%s), unless -monorepo is set", name)
 	}
 	if dir == "" {
 		dir = "./" + name
@@ -97,6 +112,7 @@ func ParseSpec(name, module, dir string, authn string, authz, db bool, cruds []s
 		Name:      name,
 		Module:    module,
 		Dir:       dir,
+		Monorepo:  monorepo,
 		Authn:     mode,
 		Authz:     authz,
 		DB:        db,

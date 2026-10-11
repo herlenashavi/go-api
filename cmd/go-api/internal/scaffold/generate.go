@@ -31,10 +31,20 @@ type docData struct {
 	Authz       bool
 	DB          bool
 	Resources   []Resource
+
+	// Monorepo-only fields; zero-valued otherwise.
+	Monorepo       bool
+	RelDir         string // e.g. "services/orders"
+	RootDirDisplay string // repo root, relative to cwd if possible
+	HasGoAPIDep    bool
 }
 
 type migrateData struct {
-	Module      string
+	// ImportPath is the migrations package's own import path: spec.Module
+	// in standalone mode (Dir is the module root), or the detected
+	// monorepo module plus Dir's relative position in it otherwise — see
+	// monorepoTarget.ImportPath.
+	ImportPath  string
 	ServiceName string
 }
 
@@ -48,25 +58,48 @@ type genFile struct {
 }
 
 // Plan returns the full set of files Generate would write, without
-// touching disk — Generate's dry-run mode and its real write path share
-// this so "what would be created" and "what is created" can never drift
-// apart.
-func Plan(spec Spec) []genFile {
+// touching disk other than the read-only go.mod lookup -monorepo mode
+// needs (see resolveMonorepo) — Generate's dry-run mode and its real
+// write path share this so "what would be created" and "what is
+// created" can never drift apart.
+func Plan(spec Spec) ([]genFile, error) {
 	goVersion := goVersion()
 
+	importPath := spec.Module // standalone: Dir is the module root, Module names it directly
+	doc := docData{
+		ServiceName: spec.Name,
+		GoVersion:   goVersion,
+		Authn:       string(spec.Authn),
+		Authz:       spec.Authz,
+		DB:          spec.DB,
+		Resources:   spec.Resources,
+	}
+
+	if spec.Monorepo {
+		target, err := resolveMonorepo(spec.Dir, spec.Module)
+		if err != nil {
+			return nil, fmt.Errorf("-monorepo: %w", err)
+		}
+		importPath = target.ImportPath
+		doc.Monorepo = true
+		doc.RelDir = target.RelDir
+		doc.RootDirDisplay = displayPath(target.RootDir)
+		doc.HasGoAPIDep = target.HasGoAPIDep
+	}
+
 	var files []genFile
+	if !spec.Monorepo {
+		files = append(files,
+			genFile{"go.mod", "gomod", map[string]string{"Module": spec.Module, "GoVersion": goVersion}},
+			genFile{".gitignore", "gitignore", map[string]string{"ServiceName": spec.Name}},
+		)
+	}
 	files = append(files,
-		genFile{"go.mod", "gomod", map[string]string{"Module": spec.Module, "GoVersion": goVersion}},
-		genFile{".gitignore", "gitignore", map[string]string{"ServiceName": spec.Name}},
-		genFile{"Dockerfile", "dockerfile", docData{ServiceName: spec.Name, GoVersion: goVersion, Authz: spec.Authz}},
-		genFile{"README.md", "readme.md", docData{
-			ServiceName: spec.Name,
-			GoVersion:   goVersion,
-			Authn:       string(spec.Authn),
-			Authz:       spec.Authz,
-			DB:          spec.DB,
-			Resources:   spec.Resources,
+		genFile{"Dockerfile", "dockerfile", docData{
+			ServiceName: spec.Name, GoVersion: goVersion, Authz: spec.Authz,
+			Monorepo: spec.Monorepo, RelDir: doc.RelDir,
 		}},
+		genFile{"README.md", "readme.md", doc},
 		genFile{"main.go", "main.go", mainData{
 			ServiceName: spec.Name,
 			Authn:       string(spec.Authn),
@@ -91,7 +124,7 @@ func Plan(spec Spec) []genFile {
 	if spec.DB {
 		files = append(files,
 			genFile{"migrations/migrations.go", "migrations_pkg.go", map[string]string{"ServiceName": spec.Name}},
-			genFile{"migrate/main.go", "migrate_main.go", migrateData{Module: spec.Module, ServiceName: spec.Name}},
+			genFile{"migrate/main.go", "migrate_main.go", migrateData{ImportPath: importPath, ServiceName: spec.Name}},
 		)
 		if len(spec.Resources) == 0 {
 			// migrations.go's //go:embed *.sql requires at least one match —
@@ -119,14 +152,17 @@ func Plan(spec Spec) []genFile {
 		)
 	}
 
-	return files
+	return files, nil
 }
 
 // Generate writes spec's plan to spec.Dir. With spec.DryRun set, it only
 // returns the list of paths that would be written (via the returned
-// []string) and touches nothing.
+// []string) and touches nothing beyond Plan's own read-only lookups.
 func Generate(spec Spec) ([]string, error) {
-	plan := Plan(spec)
+	plan, err := Plan(spec)
+	if err != nil {
+		return nil, err
+	}
 	paths := make([]string, len(plan))
 	for i, f := range plan {
 		paths[i] = f.Path
@@ -153,6 +189,24 @@ func Generate(spec Spec) ([]string, error) {
 		}
 	}
 	return paths, nil
+}
+
+// displayPath renders dir relative to the current working directory —
+// since dir is always an ancestor of the generated service's own
+// directory (resolveMonorepo only ever walks upward to find it), this is
+// almost always a short "../.." a reader can actually act on, versus an
+// absolute path. Falls back to the absolute path only if Getwd/Rel
+// itself fails (e.g. a different drive on Windows).
+func displayPath(dir string) string {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return dir
+	}
+	rel, err := filepath.Rel(cwd, dir)
+	if err != nil {
+		return dir
+	}
+	return rel
 }
 
 // checkTargetDir refuses to write into a non-empty directory unless force

@@ -24,8 +24,46 @@ go build ./...
 | `-authz` | off | a Cedar `authz.Authorizer` + the standard viewer/editor/admin `RoleRegistry`, plus a starter `policies/<name>.cedar` granting list/read to viewer, create/update to editor, delete to admin — per resource |
 | `-db` | off | a Postgres `dbx.Pool` + health check + `migrations/` + a `migrate` subcommand (same shape as `examples/heroes/migrate`) |
 | `-crud <Name>` | none, repeatable | a CRUD resource: `<name>.go` (model + `Create<Name>`/`Update<Name>` request types — a minimal id/name/timestamps shape, not a guess at your domain), `store_<name>.go` (a Postgres-backed `crud.Store`), and a migration pair. **Requires `-db`** — generated resources are Postgres-backed only, by design (see "Why Postgres-only" below) |
+| `-monorepo` | off | generate into the module enclosing `-dir` instead of a new standalone one — see "Monorepo mode" below |
 | `-force` | off | overwrite a non-empty target directory |
 | `-dry-run` | off | print the files that would be generated; write nothing |
+
+## Monorepo mode
+
+By default `go-api new` scaffolds a brand-new, standalone Go module —
+its own `go.mod`. `-monorepo` instead generates *into* an existing one:
+
+```
+cd myrepo   # already has its own go.mod
+go-api new orders -monorepo -dir services/orders -db -authn hmac -crud Order
+```
+
+What changes:
+
+- **`-module` becomes optional.** Left unset, it's detected by walking
+  up from `-dir` to the nearest `go.mod` (the same module boundary `go
+  build` itself uses) and reading its `module` line. Given anyway, it
+  must match the detected one exactly — `-monorepo` derives every
+  internal import path from that module plus `-dir`'s position inside
+  it, and an import path computed against a module `-dir` isn't actually
+  inside can't be made to compile correctly, so a mismatch is rejected
+  rather than silently producing the wrong path. If no `go.mod` is found
+  at all, that's an error too: run `go mod init` at the repo root first,
+  or drop `-monorepo` to scaffold a new standalone module instead.
+- **No `go.mod` or `.gitignore` are generated.** A monorepo has one root
+  `go.mod`; nesting another breaks it. The generated `README.md` says
+  what to add to the root `.gitignore` instead, since this tool won't
+  edit a file it didn't create.
+- **The `migrate` binary's own import, and the `Dockerfile`, are shaped
+  for a repo-root build context** instead of `-dir` being the module
+  root — `go build -o /out/<name> ./<relative-dir>` and
+  `docker build -f <relative-dir>/Dockerfile .` run from the repo root,
+  the same pattern `examples/heroes/Dockerfile` already demonstrates in
+  this repo (two services, one module, one `go.mod`).
+- **CI is not touched.** The generated `README.md` names the build
+  command to add to whatever pipeline the monorepo already has; nothing
+  here edits `.github/workflows/*.yml` automatically, for the same
+  "don't edit files this tool didn't create" reason as `.gitignore`.
 
 ## Why Postgres-only, no in-memory option
 
