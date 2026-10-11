@@ -2,6 +2,7 @@ package dbx
 
 import (
 	"context"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"go.opentelemetry.io/otel/attribute"
@@ -10,12 +11,22 @@ import (
 )
 
 // queryTracer implements pgx.QueryTracer, turning every query into a
-// client span. Statement text is attached as-is (sqlc-generated queries
+// client span and, if metrics is non-nil, a count/duration observation.
+// Statement text is attached to the span as-is (sqlc-generated queries
 // are static, parameterized SQL — never string-built from request input —
 // so this does not leak user data into span attributes the way logging a
 // dynamically-built query might).
 type queryTracer struct {
-	tracer trace.Tracer
+	tracer  trace.Tracer
+	metrics *queryMetrics // nil disables query metrics; tracing still runs
+}
+
+// queryTraceState carries what TraceQueryEnd needs from TraceQueryStart —
+// the span to close plus the start time for the duration metric, which the
+// span itself doesn't expose.
+type queryTraceState struct {
+	span  trace.Span
+	start time.Time
 }
 
 type spanContextKey struct{}
@@ -28,17 +39,20 @@ func (t *queryTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx
 			attribute.String("db.statement", data.SQL),
 		),
 	)
-	return context.WithValue(ctx, spanContextKey{}, span)
+	return context.WithValue(ctx, spanContextKey{}, &queryTraceState{span: span, start: time.Now()})
 }
 
 func (t *queryTracer) TraceQueryEnd(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryEndData) {
-	span, ok := ctx.Value(spanContextKey{}).(trace.Span)
+	st, ok := ctx.Value(spanContextKey{}).(*queryTraceState)
 	if !ok {
 		return
 	}
-	defer span.End()
+	defer st.span.End()
 	if data.Err != nil {
-		span.RecordError(data.Err)
-		span.SetStatus(codes.Error, data.Err.Error())
+		st.span.RecordError(data.Err)
+		st.span.SetStatus(codes.Error, data.Err.Error())
+	}
+	if t.metrics != nil {
+		t.metrics.record(ctx, time.Since(st.start), data.Err)
 	}
 }

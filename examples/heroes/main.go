@@ -134,6 +134,15 @@ func run(ctx context.Context) error {
 		return err
 	}
 
+	// Custom business metrics, on top of the framework's own http.server.*
+	// ones — see docs/metrics.md and metrics.go. application.Telemetry.Meter
+	// only exists once app.New has returned, which is why this wrapping
+	// happens here rather than alongside store's construction above.
+	store, err = newInstrumentedHeroStore(application.Telemetry.Meter, store)
+	if err != nil {
+		return err
+	}
+
 	// Poll for policy changes so editing policies/heroes.cedar takes
 	// effect without a restart — in `go run .` that means the local file;
 	// under deploy/tilt it's a ConfigMap-mounted volume kubelet syncs on
