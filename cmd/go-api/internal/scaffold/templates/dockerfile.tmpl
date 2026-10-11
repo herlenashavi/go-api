@@ -1,0 +1,19 @@
+# Multi-stage build for {{.ServiceName}}. Run from this directory:
+#   docker build -t {{.ServiceName}} .
+
+FROM golang:{{.GoVersion}} AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -o /out/{{.ServiceName}} .
+
+FROM gcr.io/distroless/static-debian12:nonroot
+WORKDIR /app
+COPY --from=build /out/{{.ServiceName}} ./{{.ServiceName}}
+{{if .Authz}}COPY --from=build /src/policies ./policies
+{{end}}
+EXPOSE 8080
+ENV HTTP_PORT=8080
+USER nonroot:nonroot
+ENTRYPOINT ["/app/{{.ServiceName}}"]

@@ -1,0 +1,105 @@
+package main
+
+import (
+{{.ImportBlock}})
+
+func main() {
+	setDefaultEnv("SERVICE_NAME", "{{.ServiceName}}")
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	if err := run(ctx); err != nil {
+		slog.Error("{{.ServiceName}} exited with error", "error", err)
+		os.Exit(1)
+	}
+}
+
+func setDefaultEnv(key, value string) {
+	if os.Getenv(key) == "" {
+		_ = os.Setenv(key, value)
+	}
+}
+
+func run(ctx context.Context) error {
+	cfg, err := config.Load[config.Base]()
+	if err != nil {
+		return err
+	}
+{{if eq .Authn "hmac"}}
+	// Dev HMAC verifier — swap for authn.NewJWTVerifier against a real
+	// IdP's JWKS endpoint before this goes anywhere near production.
+	verifier := authn.NewHMACVerifier([]byte(cfg.DevJWTSecret), authn.ClaimsConfig{})
+{{else if eq .Authn "jwt"}}
+	verifier, err := authn.NewJWTVerifier(ctx, authn.JWTVerifierConfig{
+		JWKSURL:  cfg.JWKSURL,
+		Issuer:   cfg.JWTIssuer,
+		Audience: cfg.JWTAudience,
+	})
+	if err != nil {
+		return err
+	}
+{{end}}
+{{if .Authz}}
+	roles, err := authz.NewRoleRegistry(
+		authz.Role{Name: "viewer"},
+		authz.Role{Name: "editor", Parents: []string{"viewer"}},
+		authz.Role{Name: "admin", Parents: []string{"editor"}},
+	)
+	if err != nil {
+		return err
+	}
+	policyStore, err := authz.LoadPolicyDir(cfg.PolicyDir)
+	if err != nil {
+		return err
+	}
+	authorizer := authz.New(policyStore, roles, nil)
+	authorizer.Debug = cfg.Debug
+{{end}}
+{{if .DB}}
+	if cfg.DatabaseURL == "" {
+		return fmt.Errorf("DATABASE_URL is required")
+	}
+	pool, err := dbx.NewPool(ctx, dbx.Config{DSN: cfg.DatabaseURL})
+	if err != nil {
+		return fmt.Errorf("connect to database: %w", err)
+	}
+	defer pool.Close()
+{{end}}
+	application, err := app.New(ctx, app.Options{
+		Config: cfg,
+{{if ne .Authn "none"}}		Verifier: verifier,
+{{end}}{{if .Authz}}		Authorizer: authorizer,
+{{end}}{{if .DB}}		HealthChecks: []health.Check{
+			{Name: "database", Checker: pool.HealthCheck},
+		},
+{{end}}	})
+	if err != nil {
+		return err
+	}
+{{if .Authz}}
+	// Poll for policy changes so editing policies/*.cedar takes effect
+	// without a restart. See docs/authorization.md.
+	go policyStore.WatchAndReload(ctx, 5*time.Second, application.Logger)
+{{end}}
+{{range .Resources}}
+	{{.Lower}}Store := New{{.Name}}PGStore(pool)
+	{{.Lower}}Resource := crud.NewResource(crud.Config[{{.Name}}, Create{{.Name}}, Update{{.Name}}]{
+		ResourceType: "{{.Name}}",
+		Store:        {{.Lower}}Store,
+{{if $.Authz}}		Authorizer: authorizer,
+{{end}}		SortableFields:   map[string]bool{"name": true, "createdAt": true},
+		FilterableFields: map[string]bool{"name": true},
+	}, cfg.Debug)
+	application.Mount("/v1/{{.Plural}}", {{.Lower}}Resource)
+{{end}}
+{{if eq .Authn "hmac"}}
+	if cfg.Debug {
+		dev := chi.NewRouter()
+		dev.Post("/token", httpx.Handle(devTokenHandler([]byte(cfg.DevJWTSecret), cfg.Debug), cfg.Debug, httpx.WithStatus(http.StatusCreated)))
+		application.MountPublic("/dev", dev)
+		application.Logger.Warn("dev-token endpoint is mounted at POST /dev/token — debug mode only, never enable in production")
+	}
+{{end}}
+	return application.ListenAndServe(ctx)
+}

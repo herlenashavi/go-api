@@ -12,8 +12,14 @@ they're visible and revisitable, not buried in a chat transcript.
 - **Wire format**: RFC 9457 `application/problem+json` errors, camelCase
   JSON bodies, cursor pagination as the default with offset as a
   documented fallback. See `pkg/problem`, `pkg/httpx.Page`.
-- **Onboarding**: a worked example (`examples/heroes`) plus docs, no
-  scaffolding CLI yet (see below).
+- **Onboarding**: a worked example (`examples/heroes`) plus docs, plus
+  `go-api new` (`cmd/go-api`, see `docs/scaffolding.md`) to generate a new
+  service with authn/authz/Postgres/CRUD wired per flag. Built once
+  `examples/heroes`+`examples/villains` had stopped moving, per the
+  original "build it once the shape has stopped moving" call below —
+  gRPC/mTLS/Tilt manifests/the custom-metrics example/`add resource` are
+  still deferred (see `docs/scaffolding.md`'s "What `new` doesn't do
+  yet").
 - **In scope now**: request timeouts, body-size limits, panic recovery,
   graceful shutdown, CORS, security headers (`pkg/middleware`); the
   `Principal.TenantID` field exists and reaches Cedar policies, though
@@ -33,9 +39,26 @@ they're visible and revisitable, not buried in a chat transcript.
 
 Each of these is a real, known gap, not an oversight:
 
-- **Scaffolding CLI** (`go-api new myservice`, `go-api add resource X`).
-  The example service + docs prove the shape first; a CLI is worth
-  building once that shape has stopped moving, not before.
+- **`go-api add resource X`** — adding a CRUD resource to an *existing*
+  generated service. `go-api new` (done — see `docs/scaffolding.md`)
+  only scaffolds at creation time; `add` would write the same
+  model/store/migration files into a directory the tool didn't create,
+  then print (not apply) the two-line `main.go` snippet to wire it in —
+  auto-editing existing hand-written source is exactly the kind of magic
+  this framework avoids elsewhere.
+- **`go-api new` add-ons not yet wired**: `-grpc`/`-mtls`
+  (`app.Options.GRPCEnabled`/`grpcx` mTLS — blocked on deciding whether/how
+  to also scaffold a starter `.proto`, since a gRPC server with no RPCs to
+  register is a mostly-empty skeleton), `-tilt` (the
+  `examples/deploy`-style Tiltfile + k8s manifests), and a
+  `-metrics-example` flag generating the `docs/metrics.md` Store-decorator
+  pattern. None of these block a generated service from working — see
+  `docs/scaffolding.md`.
+- **`-db` as an enum, not a bool.** If a non-Postgres backend (e.g.
+  DynamoDB) is ever added, `-db` on `go-api new` needs to become
+  `-db=postgres|dynamo` rather than the current boolean — flagged now so
+  it isn't a surprise breaking change later; not needed until a second
+  backend actually exists.
 - **Transactional outbox + event consumers.** Publishing an event as a
   simple post-write lifecycle hook has no delivery guarantee — the write
   could commit and the publish could still fail silently. A correct
