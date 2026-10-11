@@ -1,0 +1,31 @@
+// {{.Name}} is a generated starting point: a minimal id/name/timestamps
+// shape, not a guess at your actual domain model. Add your real fields
+// here, in store_{{.Lower}}.go, and in the matching migration
+// (migrations/*_create_{{.Plural}}.up.sql) together — crud.Store[{{.Name}}, ...]
+// only compiles if all three agree on the shape.
+package main
+
+import (
+	"time"
+
+	"github.com/google/uuid"
+)
+
+type {{.Name}} struct {
+	ID         uuid.UUID `json:"id"`
+	Name       string    `json:"name"`
+	CreatedAt  time.Time `json:"createdAt"`
+	ModifiedAt time.Time `json:"modifiedAt"`
+}
+
+// Create{{.Name}} is the POST body — no id/timestamps, those are server-assigned.
+type Create{{.Name}} struct {
+	Name string `json:"name" validate:"required"`
+}
+
+// Update{{.Name}} is the PUT/PATCH body; Name is a pointer so a PATCH can
+// omit it and leave the stored value alone. See crud.Resource's doc
+// comment on Update being shared by both PUT and PATCH.
+type Update{{.Name}} struct {
+	Name *string `json:"name"`
+}

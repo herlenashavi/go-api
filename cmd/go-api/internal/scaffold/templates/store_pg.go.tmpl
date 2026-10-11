@@ -1,0 +1,189 @@
+// store_{{.Lower}}.go is {{.Name}}'s crud.Store[{{.Name}}, Create{{.Name}}, Update{{.Name}}]
+// implementation: hand-written parameterized SQL over dbx, the same shape
+// examples/heroes/store_pg.go in github.com/herlenashavi/go-api documents
+// in detail. Filtering never interpolates a field name into SQL text —
+// {{.Lower}}FilterColumns maps each allowlisted crud.Filter.Field to its
+// actual column.
+package main
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+
+	"github.com/jackc/pgx/v5"
+
+	"github.com/herlenashavi/go-api/pkg/crud"
+	"github.com/herlenashavi/go-api/pkg/dbx"
+	"github.com/herlenashavi/go-api/pkg/problem"
+)
+
+type {{.Name}}PGStore struct {
+	pool *dbx.Pool
+}
+
+func New{{.Name}}PGStore(pool *dbx.Pool) *{{.Name}}PGStore {
+	return &{{.Name}}PGStore{pool: pool}
+}
+
+// Compile-time proof this satisfies crud.Store — if its method set drifts,
+// this fails to build instead of main.go failing to build only when this
+// store is actually wired in.
+var _ crud.Store[{{.Name}}, Create{{.Name}}, Update{{.Name}}] = (*{{.Name}}PGStore)(nil)
+
+const {{.Lower}}Columns = "id, name, created_at, modified_at"
+
+func scan{{.Name}}(row pgx.Row) ({{.Name}}, error) {
+	var v {{.Name}}
+	err := row.Scan(&v.ID, &v.Name, &v.CreatedAt, &v.ModifiedAt)
+	return v, err
+}
+
+func (s *{{.Name}}PGStore) Get(ctx context.Context, id string) ({{.Name}}, error) {
+	v, err := scan{{.Name}}(s.pool.QueryRow(ctx, `SELECT `+{{.Lower}}Columns+` FROM {{.Plural}} WHERE id = $1`, id))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return {{.Name}}{}, problem.NotFound("{{.Name}}")
+		}
+		return {{.Name}}{}, fmt.Errorf("get {{.Lower}}: %w", err)
+	}
+	return v, nil
+}
+
+func (s *{{.Name}}PGStore) Create(ctx context.Context, in Create{{.Name}}) ({{.Name}}, error) {
+	v, err := scan{{.Name}}(s.pool.QueryRow(ctx,
+		`INSERT INTO {{.Plural}} (id, name)
+		 VALUES (gen_random_uuid(), $1)
+		 RETURNING `+{{.Lower}}Columns,
+		in.Name,
+	))
+	if err != nil {
+		return {{.Name}}{}, fmt.Errorf("create {{.Lower}}: %w", err)
+	}
+	return v, nil
+}
+
+func (s *{{.Name}}PGStore) Update(ctx context.Context, id string, in Update{{.Name}}) ({{.Name}}, error) {
+	v, err := scan{{.Name}}(s.pool.QueryRow(ctx,
+		`UPDATE {{.Plural}} SET
+		   name = COALESCE($2, name),
+		   modified_at = now()
+		 WHERE id = $1
+		 RETURNING `+{{.Lower}}Columns,
+		id, in.Name,
+	))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return {{.Name}}{}, problem.NotFound("{{.Name}}")
+		}
+		return {{.Name}}{}, fmt.Errorf("update {{.Lower}}: %w", err)
+	}
+	return v, nil
+}
+
+func (s *{{.Name}}PGStore) Delete(ctx context.Context, id string) error {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM {{.Plural}} WHERE id = $1`, id)
+	if err != nil {
+		return fmt.Errorf("delete {{.Lower}}: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return problem.NotFound("{{.Name}}")
+	}
+	return nil
+}
+
+var {{.Lower}}FilterColumns = map[string]string{
+	"name": "name",
+}
+
+func (s *{{.Name}}PGStore) List(ctx context.Context, params crud.ListParams) (crud.ListResult[{{.Name}}], error) {
+	where, args := {{.Lower}}BuildWhere(params.Filters)
+	orderBy := {{.Lower}}BuildOrderBy(params.Sort)
+
+	query := `SELECT ` + {{.Lower}}Columns + ` FROM {{.Plural}}` + where + orderBy +
+		fmt.Sprintf(" LIMIT $%d OFFSET $%d", len(args)+1, len(args)+2)
+	args = append(args, params.Limit, params.Offset)
+
+	rows, err := s.pool.Query(ctx, query, args...)
+	if err != nil {
+		return crud.ListResult[{{.Name}}]{}, fmt.Errorf("list {{.Plural}}: %w", err)
+	}
+	defer rows.Close()
+
+	var items []{{.Name}}
+	for rows.Next() {
+		v, err := scan{{.Name}}(rows)
+		if err != nil {
+			return crud.ListResult[{{.Name}}]{}, fmt.Errorf("scan {{.Lower}}: %w", err)
+		}
+		items = append(items, v)
+	}
+	if err := rows.Err(); err != nil {
+		return crud.ListResult[{{.Name}}]{}, fmt.Errorf("list {{.Plural}}: %w", err)
+	}
+
+	result := crud.ListResult[{{.Name}}]{Items: items}
+	if params.WithTotal {
+		countArgs := args[:len(args)-2] // drop limit/offset for the count query
+		var total int
+		if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM {{.Plural}}`+where, countArgs...).Scan(&total); err != nil {
+			return crud.ListResult[{{.Name}}]{}, fmt.Errorf("count {{.Plural}}: %w", err)
+		}
+		result.Total = &total
+	}
+	return result, nil
+}
+
+func {{.Lower}}BuildWhere(filters []crud.Filter) (string, []any) {
+	if len(filters) == 0 {
+		return "", nil
+	}
+	var clauses []string
+	var args []any
+	for _, f := range filters {
+		column, ok := {{.Lower}}FilterColumns[f.Field]
+		if !ok {
+			continue // defense in depth: crud already allowlisted this, but never trust it twice
+		}
+		args = append(args, f.Value)
+		switch f.Op {
+		case "ne":
+			clauses = append(clauses, fmt.Sprintf("%s != $%d", column, len(args)))
+		case "like":
+			clauses = append(clauses, fmt.Sprintf("%s ILIKE '%%' || $%d || '%%'", column, len(args)))
+		default: // eq
+			clauses = append(clauses, fmt.Sprintf("%s = $%d", column, len(args)))
+		}
+	}
+	if len(clauses) == 0 {
+		return "", nil
+	}
+	return " WHERE " + strings.Join(clauses, " AND "), args
+}
+
+func {{.Lower}}BuildOrderBy(sortFields []crud.SortField) string {
+	if len(sortFields) == 0 {
+		return " ORDER BY name ASC"
+	}
+	var parts []string
+	for _, sf := range sortFields {
+		column, ok := {{.Lower}}FilterColumns[sf.Field]
+		if !ok {
+			if sf.Field == "createdAt" {
+				column = "created_at"
+			} else {
+				continue
+			}
+		}
+		dir := "ASC"
+		if sf.Desc {
+			dir = "DESC"
+		}
+		parts = append(parts, column+" "+dir)
+	}
+	if len(parts) == 0 {
+		return " ORDER BY name ASC"
+	}
+	return " ORDER BY " + strings.Join(parts, ", ")
+}
