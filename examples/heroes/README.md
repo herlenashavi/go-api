@@ -107,7 +107,9 @@ curl -s localhost:8080/health/metrics | grep http_server
 | `main.go` | Wiring: config, authn verifier, role registry + policy store, `app.New`, mounting CRUD + a custom route |
 | `hero.go` | Response/Create/Update types — the generic parameters `crud.Resource` needs |
 | `store_memory.go` | A `crud.Store[Hero, CreateHero, UpdateHero]` implementation with zero dependencies |
-| `store_pg.go` | The same interface backed by real `dbx`/pgx — **not wired up**, a reference for swapping stores |
+| `store_pg.go` | The same interface backed by real `dbx`/pgx — used automatically when `DATABASE_URL` is set, see below |
+| `migrations/` | This service's SQL schema (`heroes`, `hero_audit_log`), embedded and applied by `migrate/` |
+| `migrate/` | A separate one-off binary that applies/rolls back `migrations/` against `DATABASE_URL` |
 | `retire.go` | A hand-written route + row-level ABAC check (loads the row, then calls `Authorizer.Check` with its real attributes) |
 | `villains_client.go` | `pkg/grpcx.Dial`-based client for the villains service — tracing, request ID, and token forwarding |
 | `main.go`'s `loadMTLS` | Opt-in mutual TLS for the villains client — see villains' README |
@@ -117,15 +119,24 @@ curl -s localhost:8080/health/metrics | grep http_server
 
 ## Running against Postgres instead
 
-Swap the store construction in `main.go`:
+Set `DATABASE_URL` and `main.go` switches from `MemoryHeroStore` to the
+real `dbx`/pgx-backed `PGHeroStore` (store_pg.go) automatically — nothing
+to edit. `store_pg.go`'s `var _ crud.Store[...] = (*PGHeroStore)(nil)`
+assertion means this only compiles because `PGHeroStore` actually
+satisfies the same interface the memory store does.
 
-```go
-pool, err := dbx.NewPool(ctx, dbx.Config{DSN: os.Getenv("DATABASE_URL"), Tracer: application.Telemetry.Tracer})
-store := NewPGHeroStore(pool)
+Apply the schema first, with the separate `migrate` binary — a real
+service runs this as a deploy step, not something the service does to
+itself on every boot:
+
+```shell
+docker run -d --name heroes-pg -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=heroes -p 5432:5432 postgres:16-alpine
+
+export DATABASE_URL="postgres://postgres:postgres@localhost:5432/heroes?sslmode=disable"
+go run ./migrate up      # applies migrations/0001_create_heroes, 0002_create_hero_audit_log
+go run .                 # now runs on PGHeroStore instead of MemoryHeroStore
 ```
 
-`store_pg.go` has a `var _ crud.Store[...] = (*PGHeroStore)(nil)` assertion,
-so this compiles iff `PGHeroStore` actually satisfies the interface — no
-behavioral surprises from the swap. You'd also need a `heroes` table and
-a migration tool (goose/atlas — not included); see its doc comment for
-the expected schema shape.
+`go run ./migrate down` rolls the schema back (local dev/tests only).
+Under Tilt, this is wired up for you — see
+[docs/tilt-dev.md](../../docs/tilt-dev.md#postgres--migrations).

@@ -10,6 +10,20 @@ import (
 	"github.com/herlenashavi/go-api/pkg/problem"
 )
 
+// villainStore is everything VillainServer needs from a store — this
+// package's analogue of examples/heroes's heroStore (retire.go). Both
+// VillainStore (store.go, in-memory) and VillainPGStore (store_pg.go,
+// real Postgres) implement it, so main.go can construct either one
+// without anything here caring which: every method returns an error
+// (even VillainStore's, which can't actually fail) so a real backend
+// has somewhere to report one.
+type villainStore interface {
+	List(ctx context.Context, statusFilter villainsv1.VillainStatus, limit, offset int) ([]Villain, int, error)
+	Get(ctx context.Context, id string) (Villain, error)
+	Create(ctx context.Context, name, evilPower, nemesisHeroID string, threatLevel villainsv1.ThreatLevel) (Villain, error)
+	Capture(ctx context.Context, id string) (Villain, error)
+}
+
 // VillainServer implements villainsv1.VillainServiceServer. Each method
 // follows the same shape: authorize first (using the Principal
 // grpcx's server interceptor already placed in ctx), then touch the
@@ -22,11 +36,11 @@ import (
 // routes and pkg/crud's generated ones both use.
 type VillainServer struct {
 	villainsv1.UnimplementedVillainServiceServer
-	store      *VillainStore
+	store      villainStore
 	authorizer *authz.Authorizer
 }
 
-func NewVillainServer(store *VillainStore, authorizer *authz.Authorizer) *VillainServer {
+func NewVillainServer(store villainStore, authorizer *authz.Authorizer) *VillainServer {
 	return &VillainServer{store: store, authorizer: authorizer}
 }
 
@@ -50,7 +64,10 @@ func (s *VillainServer) ListVillains(ctx context.Context, req *villainsv1.ListVi
 		return nil, err
 	}
 
-	items, total := s.store.List(req.StatusFilter, int(req.Limit), int(req.Offset))
+	items, total, err := s.store.List(ctx, req.StatusFilter, int(req.Limit), int(req.Offset))
+	if err != nil {
+		return nil, grpcx.Status(err)
+	}
 	resp := &villainsv1.ListVillainsResponse{Total: int32(total)}
 	for _, v := range items {
 		resp.Villains = append(resp.Villains, v.toProto())
@@ -63,9 +80,9 @@ func (s *VillainServer) GetVillain(ctx context.Context, req *villainsv1.GetVilla
 		return nil, err
 	}
 
-	v, ok := s.store.Get(req.Id)
-	if !ok {
-		return nil, grpcx.Status(problem.NotFound("Villain"))
+	v, err := s.store.Get(ctx, req.Id)
+	if err != nil {
+		return nil, grpcx.Status(err)
 	}
 	return &villainsv1.GetVillainResponse{Villain: v.toProto()}, nil
 }
@@ -78,7 +95,10 @@ func (s *VillainServer) CreateVillain(ctx context.Context, req *villainsv1.Creat
 		return nil, grpcx.Status(problem.Validation(problem.FieldError{Field: "name", Detail: "is required"}))
 	}
 
-	v := s.store.Create(req.Name, req.EvilPower, req.NemesisHeroId, villainsv1.ThreatLevel_THREAT_LEVEL_UNSPECIFIED)
+	v, err := s.store.Create(ctx, req.Name, req.EvilPower, req.NemesisHeroId, villainsv1.ThreatLevel_THREAT_LEVEL_UNSPECIFIED)
+	if err != nil {
+		return nil, grpcx.Status(err)
+	}
 	return &villainsv1.CreateVillainResponse{Villain: v.toProto()}, nil
 }
 
@@ -95,9 +115,9 @@ func (s *VillainServer) CaptureVillain(ctx context.Context, req *villainsv1.Capt
 		return nil, grpcx.Status(problem.Unauthorized(""))
 	}
 
-	existing, ok := s.store.Get(req.Id)
-	if !ok {
-		return nil, grpcx.Status(problem.NotFound("Villain"))
+	existing, err := s.store.Get(ctx, req.Id)
+	if err != nil {
+		return nil, grpcx.Status(err)
 	}
 
 	resource := authz.ResourceRef{Type: "Villain", ID: req.Id}
@@ -106,9 +126,9 @@ func (s *VillainServer) CaptureVillain(ctx context.Context, req *villainsv1.Capt
 		return nil, grpcx.Status(err)
 	}
 
-	v, ok := s.store.Capture(req.Id)
-	if !ok {
-		return nil, grpcx.Status(problem.NotFound("Villain"))
+	v, err := s.store.Capture(ctx, req.Id)
+	if err != nil {
+		return nil, grpcx.Status(err)
 	}
 	return &villainsv1.CaptureVillainResponse{Villain: v.toProto()}, nil
 }

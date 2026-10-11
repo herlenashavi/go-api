@@ -1,0 +1,22 @@
+# The official postgres image only creates ONE database/user pair from
+# POSTGRES_DB/POSTGRES_USER/POSTGRES_PASSWORD (postgres-secret.yaml,
+# used for heroes) — anything mounted under
+# /docker-entrypoint-initdb.d/ runs once, as the bootstrap superuser, the
+# first time the data directory is empty (see postgres.yaml's emptyDir
+# volume: that's every pod start here). This ConfigMap is that second
+# init step, creating villains' own database and user.
+#
+# villains-dev-password here matches postgres-secret.yaml's
+# VILLAINS_DATABASE_URL and examples/Tiltfile's villains-migrate
+# resource by hand — same tradeoff postgres-secret.yaml's header comment
+# already makes for heroes' password, for the same reason (a two/three
+# -file demo, not a credential worth automating the sync for).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-init
+  namespace: go-api-demo
+data:
+  01-create-villains-db.sql: |
+    CREATE USER villains WITH PASSWORD 'villains-dev-password';
+    CREATE DATABASE villains OWNER villains;

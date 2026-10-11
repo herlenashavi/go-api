@@ -37,6 +37,16 @@ spec:
                 secretKeyRef:
                   name: dev-jwt-secret
                   key: DEV_JWT_SECRET
+            # Set at all means run() constructs VillainPGStore instead of
+            # VillainStore (see examples/villains/main.go) — same opt-in
+            # pattern as heroes.yaml's DATABASE_URL. The schema it
+            # queries is applied beforehand by the Tiltfile's
+            # villains-migrate resource, not by this pod on boot.
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: VILLAINS_DATABASE_URL
           volumeMounts:
             - name: policies
               mountPath: /app/policies

@@ -123,6 +123,52 @@ broken when a policy edit doesn't take effect in the first few seconds.
 (Running `go run .` directly, outside Kubernetes, skips steps 1–2 entirely
 and reacts within one poll interval.)
 
+### 3. Postgres & migrations
+
+Both heroes and villains can run against real Postgres instead of their
+default in-memory stores (see
+[examples/heroes/README.md](../examples/heroes/README.md#running-against-postgres-instead)
+/ [examples/villains/README.md](../examples/villains/README.md#running-against-postgres-instead)
+for the schemas and `PGHeroStore` / `VillainPGStore`). Under Tilt that's
+wired up end to end, with no manual step:
+
+1. `deploy/k8s/postgres.yaml` + `postgres-secret.yaml` deploy a single
+   Postgres server (disposable, `emptyDir`-backed — see that file's
+   header comment for why that's fine here and wouldn't be in
+   production) and expose it as the `postgres` Service, port-forwarded
+   to `localhost:5432`. `deploy/k8s/postgres-init-configmap.yaml` runs
+   once, on first boot, to give villains its own database and user
+   alongside heroes' (the one the `postgres` image's own
+   `POSTGRES_DB`/`POSTGRES_USER` env vars create) — one server, two
+   unrelated credentials, two unrelated databases, the same "no shared
+   database" relationship heroes and villains already have at the
+   application level.
+2. The `heroes-migrate` / `villains-migrate` `local_resource`s each
+   apply their own service's `migrations/*.sql` against that
+   port-forward by running its `migrate` binary on the host (`go run`,
+   same fast-iteration reasoning as §1's binary builds) — not a
+   Dockerized k8s `Job`, since a migration this cheap doesn't need one.
+   Tilt's `resource_deps` makes each wait for Postgres's `pg_isready`
+   readiness probe first.
+3. `heroes`'s / `villains`'s own `resource_deps` wait on their
+   respective migrate resource in turn, and their Deployments'
+   `DATABASE_URL` env (from `postgres-secret`'s in-cluster DSNs) make
+   `main.go` construct `PGHeroStore` / `VillainPGStore` instead of the
+   in-memory store — see `run()` in each service's `main.go`.
+
+Edit a file under either service's `migrations/`, save: Tilt reruns that
+service's migrate resource (it's a tracked dependency) before the
+service restarts, the same ordering guarantee `resource_deps` gives the
+rest of this setup.
+
+```shell
+kubectl exec deploy/postgres -n go-api-demo -- psql -U heroes -d heroes
+kubectl exec deploy/postgres -n go-api-demo -- psql -U villains -d villains
+```
+
+gets you a `psql` shell against either database, if you want to look at
+the tables directly.
+
 ## Layout
 
 Everything here is example-app specific, so it all lives under
@@ -137,10 +183,19 @@ examples/
       villains.Dockerfile   # same, for villains
       bin/                  # local_resource's build output (gitignored)
     k8s/
-      namespace.yaml        # go-api-demo namespace
-      secret.yaml           # shared dev JWT secret (see its own comment)
-      heroes.yaml           # Deployment + Service
-      villains.yaml         # Deployment + Service
+      namespace.yaml              # go-api-demo namespace
+      secret.yaml                 # shared dev JWT secret (see its own comment)
+      postgres-secret.yaml        # dev Postgres credentials + in-cluster DSNs
+      postgres-init-configmap.yaml # creates villains' own database/user
+      postgres.yaml                # Deployment + Service, backs both stores below
+      heroes.yaml                  # Deployment + Service
+      villains.yaml                # Deployment + Service
+  heroes/
+    migrations/              # SQL schema, embedded (go:embed) into migrate/
+    migrate/                 # one-off "apply/roll back migrations" binary
+  villains/
+    migrations/              # same pattern, villains' own schema
+    migrate/                 # same pattern, villains' own binary
 ```
 
 The Cedar policy `ConfigMap`s aren't static files here — see §2 above.
@@ -167,4 +222,11 @@ cross-service `nemesis` call working end-to-end through the cluster, and
 a `live_update` edit reaching the running pod in ~1 second with zero
 Kubernetes-level restarts — has been run for real against a
 `--container-runtime=docker` minikube cluster; it is not merely inferred
-from the static checks above.
+from the static checks above. Postgres and both migrate resources (§3)
+were confirmed the same way: `postgres` reaches `Running` with
+`heroes`/`hero_audit_log` present in the `heroes` database and
+`villains` present in its own separate `villains` database (`psql
+\dt` against each), a hero created through `heroes`'s live HTTP API
+round-trips through its Postgres database, and a villain created and
+captured through `villains`'s live gRPC API round-trips through its
+own — neither via the in-memory store.

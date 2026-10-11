@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -13,6 +14,7 @@ import (
 	"github.com/herlenashavi/go-api/pkg/authn"
 	"github.com/herlenashavi/go-api/pkg/authz"
 	"github.com/herlenashavi/go-api/pkg/config"
+	"github.com/herlenashavi/go-api/pkg/dbx"
 	"github.com/herlenashavi/go-api/pkg/grpcx"
 	"github.com/herlenashavi/go-api/pkg/health"
 )
@@ -87,7 +89,30 @@ func run(ctx context.Context) error {
 	authorizer := authz.New(policyStore, roles, nil)
 	authorizer.Debug = cfg.Debug
 
-	store := NewVillainStore()
+	// --- Storage: in-memory with zero setup by default; set DATABASE_URL
+	// to run against real Postgres instead, via VillainPGStore
+	// (store_pg.go) — same opt-in pattern as examples/heroes. Schema
+	// comes from examples/villains/migrations, applied separately — see
+	// examples/villains/migrate — not by this process at boot. ---
+	var store villainStore
+	healthChecks := []health.Check{
+		{Name: "villain-store", Checker: func(context.Context) error { return nil }},
+	}
+
+	var pool *dbx.Pool
+	if cfg.DatabaseURL != "" {
+		pool, err = dbx.NewPool(ctx, dbx.Config{DSN: cfg.DatabaseURL})
+		if err != nil {
+			return fmt.Errorf("connect to database: %w", err)
+		}
+		defer pool.Close()
+		store = NewVillainPGStore(pool)
+		healthChecks = []health.Check{
+			{Name: "villain-store", Checker: pool.HealthCheck},
+		}
+	} else {
+		store = NewVillainStore()
+	}
 
 	mtls, err := loadMTLS(cfg.MTLS)
 	if err != nil {
@@ -95,14 +120,12 @@ func run(ctx context.Context) error {
 	}
 
 	application, err := app.New(ctx, app.Options{
-		Config:      cfg,
-		Verifier:    verifier,
-		Authorizer:  authorizer,
-		GRPCEnabled: true,
-		GRPCMTLS:    mtls,
-		HealthChecks: []health.Check{
-			{Name: "villain-store", Checker: func(context.Context) error { return nil }},
-		},
+		Config:       cfg,
+		Verifier:     verifier,
+		Authorizer:   authorizer,
+		GRPCEnabled:  true,
+		GRPCMTLS:     mtls,
+		HealthChecks: healthChecks,
 	})
 	if err != nil {
 		return err

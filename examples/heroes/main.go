@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -16,6 +17,7 @@ import (
 	"github.com/herlenashavi/go-api/pkg/authz"
 	"github.com/herlenashavi/go-api/pkg/config"
 	"github.com/herlenashavi/go-api/pkg/crud"
+	"github.com/herlenashavi/go-api/pkg/dbx"
 	"github.com/herlenashavi/go-api/pkg/grpcx"
 	"github.com/herlenashavi/go-api/pkg/health"
 	"github.com/herlenashavi/go-api/pkg/httpx"
@@ -98,17 +100,35 @@ func run(ctx context.Context) error {
 	authorizer := authz.New(policyStore, roles, nil)
 	authorizer.Debug = cfg.Debug
 
-	// --- Storage: in-memory for this example; see store_pg.go for the
-	// dbx/pgx-backed shape a real service would use instead. ---
-	store := NewMemoryHeroStore()
+	// --- Storage: in-memory with zero setup by default; set DATABASE_URL
+	// to run against real Postgres instead, via PGHeroStore (store_pg.go).
+	// Schema comes from examples/heroes/migrations, applied separately —
+	// see examples/heroes/migrate — not by this process at boot. ---
+	var store heroStore
+	healthChecks := []health.Check{
+		{Name: "hero-store", Checker: func(context.Context) error { return nil }},
+	}
+
+	var pool *dbx.Pool
+	if cfg.DatabaseURL != "" {
+		pool, err = dbx.NewPool(ctx, dbx.Config{DSN: cfg.DatabaseURL})
+		if err != nil {
+			return fmt.Errorf("connect to database: %w", err)
+		}
+		defer pool.Close()
+		store = NewPGHeroStore(pool)
+		healthChecks = []health.Check{
+			{Name: "hero-store", Checker: pool.HealthCheck},
+		}
+	} else {
+		store = NewMemoryHeroStore()
+	}
 
 	application, err := app.New(ctx, app.Options{
-		Config:     cfg.Base,
-		Verifier:   verifier,
-		Authorizer: authorizer,
-		HealthChecks: []health.Check{
-			{Name: "hero-store", Checker: func(context.Context) error { return nil }},
-		},
+		Config:       cfg.Base,
+		Verifier:     verifier,
+		Authorizer:   authorizer,
+		HealthChecks: healthChecks,
 	})
 	if err != nil {
 		return err

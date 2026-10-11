@@ -44,7 +44,7 @@ type nemesisOutput struct {
 // Villain in the response. A villain ID that no longer resolves (the
 // villains service doesn't have it, or is unreachable) *is* an error,
 // surfaced via the grpcx.Problem mapping VillainsClient already applies.
-func nemesisHandler(store *MemoryHeroStore, villains *VillainsClient) func(ctx context.Context, in *nemesisInput) (*nemesisOutput, error) {
+func nemesisHandler(store heroStore, villains *VillainsClient) func(ctx context.Context, in *nemesisInput) (*nemesisOutput, error) {
 	return func(ctx context.Context, in *nemesisInput) (*nemesisOutput, error) {
 		hero, err := store.Get(ctx, in.ID.String())
 		if err != nil {
