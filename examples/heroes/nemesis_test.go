@@ -13,6 +13,7 @@ import (
 
 	villainsv1 "github.com/herlenashavi/go-api/examples/villains/gen/villains/v1"
 	"github.com/herlenashavi/go-api/pkg/authn"
+	"github.com/herlenashavi/go-api/pkg/authz"
 	"github.com/herlenashavi/go-api/pkg/grpcx"
 	"github.com/herlenashavi/go-api/pkg/problem"
 	"github.com/herlenashavi/go-api/pkg/reqctx"
@@ -83,7 +84,7 @@ func TestNemesisHandler_NoNemesisSet(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	handler := nemesisHandler(store, client)
+	handler := nemesisHandler(store, client, nil)
 	out, err := handler(context.Background(), &nemesisInput{ID: created.ID})
 	if err != nil {
 		t.Fatalf("nemesisHandler: %v", err)
@@ -114,7 +115,7 @@ func TestNemesisHandler_ForwardsRequestIDAndToken(t *testing.T) {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 
-	handler := nemesisHandler(store, client)
+	handler := nemesisHandler(store, client, nil)
 	out, err := handler(ctx, &nemesisInput{ID: created.ID})
 	if err != nil {
 		t.Fatalf("nemesisHandler: %v", err)
@@ -134,6 +135,61 @@ func TestNemesisHandler_ForwardsRequestIDAndToken(t *testing.T) {
 	}
 }
 
+// TestNemesisHandler_RequiresHeroRead proves the hand-written nemesis route
+// enforces the same "hero:read" check crud.Resource's GET /{id} does,
+// against the shipped policy file: a principal with no role is denied
+// before any hero data is loaded, a viewer is allowed, and a request with
+// no principal at all is rejected as unauthenticated.
+func TestNemesisHandler_RequiresHeroRead(t *testing.T) {
+	_, addr := startStubVillains(t)
+	client, err := NewVillainsClient(addr, grpcx.Dependencies{})
+	if err != nil {
+		t.Fatalf("NewVillainsClient: %v", err)
+	}
+	defer client.Close()
+
+	roles, err := authz.NewRoleRegistry(
+		authz.Role{Name: "viewer"},
+		authz.Role{Name: "editor", Parents: []string{"viewer"}},
+		authz.Role{Name: "admin", Parents: []string{"editor"}},
+	)
+	if err != nil {
+		t.Fatalf("NewRoleRegistry: %v", err)
+	}
+	policyStore, err := authz.LoadPolicyDir("./policies")
+	if err != nil {
+		t.Fatalf("LoadPolicyDir: %v", err)
+	}
+	authorizer := authz.New(policyStore, roles, nil)
+
+	store := NewMemoryHeroStore()
+	created, err := store.Create(context.Background(), CreateHero{Name: "Clark", SuperPower: "flight"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	handler := nemesisHandler(store, client, authorizer)
+
+	noRole := authn.WithPrincipal(context.Background(), &authn.Principal{Subject: "mallory"})
+	_, err = handler(noRole, &nemesisInput{ID: created.ID})
+	if p := problem.From(err, true); err == nil || p.Status != 403 {
+		t.Fatalf("no-role principal: err = %v, want 403", err)
+	}
+
+	viewer := authn.WithPrincipal(context.Background(), &authn.Principal{Subject: "bob", Roles: []string{"viewer"}})
+	out, err := handler(viewer, &nemesisInput{ID: created.ID})
+	if err != nil {
+		t.Fatalf("viewer: %v", err)
+	}
+	if out.HeroName != "Clark" {
+		t.Fatalf("viewer got hero %q, want Clark", out.HeroName)
+	}
+
+	_, err = handler(context.Background(), &nemesisInput{ID: created.ID})
+	if p := problem.From(err, true); err == nil || p.Status != 401 {
+		t.Fatalf("no principal: err = %v, want 401", err)
+	}
+}
+
 func TestNemesisHandler_UnknownVillainBecomesProblem(t *testing.T) {
 	_, addr := startStubVillains(t)
 	client, err := NewVillainsClient(addr, grpcx.Dependencies{})
@@ -148,7 +204,7 @@ func TestNemesisHandler_UnknownVillainBecomesProblem(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	handler := nemesisHandler(store, client)
+	handler := nemesisHandler(store, client, nil)
 	_, err = handler(context.Background(), &nemesisInput{ID: created.ID})
 	if err == nil {
 		t.Fatal("expected an error for an unresolvable villain id")

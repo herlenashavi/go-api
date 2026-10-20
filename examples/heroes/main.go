@@ -190,7 +190,7 @@ func run(ctx context.Context) error {
 	// crud.NewResource returns a plain chi.Router, so this is just adding
 	// another route to it, not a special integration point.
 	heroes.Post("/{id}/retire", httpx.Handle(retireHandler(store, authorizer, cfg.Debug), cfg.Debug))
-	heroes.Get("/{id}/nemesis", httpx.Handle(nemesisHandler(store, villains), cfg.Debug))
+	heroes.Get("/{id}/nemesis", httpx.Handle(nemesisHandler(store, villains, authorizer), cfg.Debug))
 
 	application.Mount("/v1/heroes", heroes)
 
