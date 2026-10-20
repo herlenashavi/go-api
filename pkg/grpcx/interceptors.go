@@ -64,8 +64,8 @@ func requestIDFromMetadata(ctx context.Context) string {
 		return ""
 	}
 	values := md.Get(requestIDMetadataKey)
-	if len(values) == 0 {
-		return ""
+	if len(values) == 0 || !reqctx.ValidRequestID(values[0]) {
+		return "" // caller mints a fresh ID; see reqctx.ValidRequestID
 	}
 	return values[0]
 }
