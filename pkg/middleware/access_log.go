@@ -17,8 +17,9 @@ import (
 // AccessLogConfig controls AccessLog.
 type AccessLogConfig struct {
 	Logger *slog.Logger
-	// IgnorePaths skips logging entirely for any request path containing
-	// one of these substrings (e.g. "/health/liveness"). Applied
+	// IgnorePaths skips logging entirely for any request path equal to, or
+	// nested under, one of these prefixes ("/health" matches
+	// "/health/liveness" but not "/v1/patients/{id}/health-records"). Applied
 	// consistently regardless of log level — a debug-mode logger doesn't
 	// bypass this list, which would defeat the point of having one.
 	IgnorePaths []string
@@ -66,9 +67,18 @@ func AccessLog(cfg AccessLogConfig) func(http.Handler) http.Handler {
 	}
 }
 
+// shouldIgnore reports whether path is one of ignorePaths or sits beneath
+// one of them as a whole path segment. A substring match would also hide
+// unrelated routes that merely contain the word — "/health" swallowing
+// "/v1/patients/{id}/health-records" — silently dropping them from logs and
+// metrics.
 func shouldIgnore(path string, ignorePaths []string) bool {
 	for _, p := range ignorePaths {
-		if strings.Contains(path, p) {
+		p = strings.TrimSuffix(p, "/")
+		if p == "" {
+			continue
+		}
+		if path == p || strings.HasPrefix(path, p+"/") {
 			return true
 		}
 	}

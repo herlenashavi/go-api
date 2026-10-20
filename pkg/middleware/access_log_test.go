@@ -362,7 +362,11 @@ func TestShouldIgnore(t *testing.T) {
 		want    bool
 	}{
 		{"/health/liveness", []string{"/health"}, true},
-		{"/v1/health-records", []string{"/health"}, true}, // substring match, documented
+		{"/health", []string{"/health"}, true},
+		{"/health/", []string{"/health/"}, true},
+		{"/v1/health-records", []string{"/health"}, false},
+		{"/v1/patients/42/health", []string{"/health"}, false},
+		{"/healthz", []string{"/health"}, false},
 		{"/v1/heroes", []string{"/health"}, false},
 		{"/v1/heroes", nil, false},
 		{"/metrics", []string{"/health", "/metrics"}, true},
