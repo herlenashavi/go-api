@@ -44,8 +44,10 @@ func bearerToken(r *http.Request) (string, error) {
 	if header == "" {
 		return "", errMissingAuth
 	}
-	const prefix = "Bearer "
-	if !strings.HasPrefix(header, prefix) {
+	// The auth-scheme is case-insensitive (RFC 7235 §2.1), so "bearer" and
+	// "BEARER" are as valid as "Bearer".
+	const prefix = "bearer "
+	if len(header) < len(prefix) || !strings.EqualFold(header[:len(prefix)], prefix) {
 		return "", errMalformedAuth
 	}
 	token := strings.TrimSpace(header[len(prefix):])

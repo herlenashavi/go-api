@@ -98,3 +98,23 @@ func TestMiddleware_ValidTokenSetsPrincipal(t *testing.T) {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
 }
+
+// The auth-scheme is case-insensitive per RFC 7235 §2.1.
+func TestMiddleware_BearerSchemeIsCaseInsensitive(t *testing.T) {
+	secret := []byte("secret")
+	verifier := authn.NewHMACVerifier(secret, authn.ClaimsConfig{})
+	h := authn.Middleware(verifier)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	token, _ := authn.SignHMAC(secret, authn.Principal{Subject: "bob"}, time.Minute)
+
+	for _, scheme := range []string{"Bearer", "bearer", "BEARER", "bEaReR"} {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.Header.Set("Authorization", scheme+" "+token)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("scheme %q: status = %d, want 200", scheme, rec.Code)
+		}
+	}
+}
