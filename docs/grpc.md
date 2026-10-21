@@ -50,7 +50,10 @@ interceptor chain, outermost first: **panic recovery** (a crashed handler
 goroutine would otherwise take the whole process down — see
 `recoveryInterceptor`'s doc comment), **request ID** propagation,
 **access logging**, then **bearer-token authentication** (only if a
-`Verifier` is set). OTel tracing/metrics are wired as a `stats.Handler`
+`Verifier` is set). The same chain is installed for **streaming** RPCs
+(`pkg/grpcx/stream.go`), so a streaming method you register is never
+served unauthenticated or without panic recovery. OTel tracing/metrics
+are wired as a `stats.Handler`
 (otelgrpc's current API, not an interceptor), using the *same*
 `TracerProvider`/`MeterProvider` as the HTTP side — one telemetry
 pipeline, not two.
@@ -65,7 +68,9 @@ fix and its regression test are `healthServiceMethodPrefix` and
 
 When `Debug` is true (`config.Base.Debug`), server reflection is also
 registered, so `grpcurl` works without a copy of your `.proto` — the gRPC
-equivalent of only serving OpenAPI/docs in debug mode.
+equivalent of only serving OpenAPI/docs in debug mode. Reflection is a
+streaming RPC, so on a server with a `Verifier` it needs a token too:
+`grpcurl -H "authorization: Bearer $TOKEN" ...`.
 
 ## Authorization inside an RPC handler
 
@@ -92,7 +97,12 @@ func (s *VillainServer) CaptureVillain(ctx context.Context, req *pb.CaptureVilla
 `grpcx.Status` maps a `*problem.Problem` (what `Authorizer.Authorize`,
 `httpx.Validate`, and `problem`'s constructors all return) to the closest
 gRPC code, so the same authz/validation logic produces the right error
-shape on both sides of a service. See `examples/villains/server.go` and
+shape on both sides of a service. Any other error (a store or driver
+error, say) becomes `codes.Internal` with a generic `"internal error"`
+message — never its `Error()` text, which can carry SQL, hostnames, or
+row data — the same posture as `problem.Internal(err, false)` over HTTP.
+Wrap with `problem.Internal(err, debug)` yourself if you want the detail
+in debug mode. See `examples/villains/server.go` and
 its `policies/villains.cedar` for the full pattern, including the
 row-level ABAC check ("can't capture an already-captured villain") that
 needs the real row loaded first — identical reasoning to
@@ -238,10 +248,10 @@ exactly this.)
 
 ## What's not here
 
-- **No streaming support.** Every interceptor in this package is unary
-  (`grpc.UnaryServerInterceptor`/`UnaryClientInterceptor`); a streaming
-  RPC would need its own interceptor wired via `grpc.StreamInterceptor`
-  and isn't exercised by either example service.
+- **Partial streaming support.** The *server* chain covers streaming RPCs
+  (recovery, request ID, access log, peer identity, authentication), but
+  `Dial`'s request-ID/token forwarding is a unary client interceptor
+  only, and neither example service defines a streaming method.
 - **No generic method→action mapping.** See the top of this doc and
   `pkg/grpcx`'s package doc — this is deliberate, not an oversight.
 - **No CA rotation.** The client-side CA pool (for verifying the
