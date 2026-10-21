@@ -129,8 +129,14 @@ func (a *App) GRPCAddr() string {
 
 // New assembles an App: logging, OTel tracing/metrics, the default
 // middleware chain (request ID, panic recovery, tracing, RED metrics,
-// access log, timeout, body limit, CORS, security headers), and
+// body limit, access log, CORS, security headers, timeout), and
 // /health/{liveness,readiness,metrics}.
+//
+// Two orderings in that chain are load-bearing. BodyLimit sits ahead of
+// AccessLog so debug-mode request-body logging only ever sees a bounded
+// body. CORS and SecurityHeaders sit ahead of Timeout so their headers are
+// set on the real ResponseWriter, not on Timeout's buffer — which is
+// discarded when a request times out, leaving the 503 without them.
 func New(ctx context.Context, opts Options) (*App, error) {
 	cfg := opts.Config
 
@@ -165,15 +171,15 @@ func New(ctx context.Context, opts Options) (*App, error) {
 	r.Use(middleware.Recover(logger, cfg.Debug))
 	r.Use(middleware.Tracing(tp.Tracer, tp.Propagator))
 	r.Use(middleware.Metrics(middleware.MetricsConfig{Metrics: httpMetrics, IgnorePaths: healthIgnore}))
+	r.Use(middleware.BodyLimit(cfg.MaxBodyBytes))
 	r.Use(middleware.AccessLog(middleware.AccessLogConfig{
 		Logger:         logger,
 		IgnorePaths:    healthIgnore,
 		LogRequestBody: cfg.Debug,
 	}))
-	r.Use(middleware.Timeout(time.Duration(cfg.RequestTimeoutSeconds)*time.Second, logger, cfg.Debug))
-	r.Use(middleware.BodyLimit(cfg.MaxBodyBytes))
 	r.Use(middleware.CORS(cfg.CORSAllowedOrigins))
 	r.Use(middleware.SecurityHeaders(opts.CSP))
+	r.Use(middleware.Timeout(time.Duration(cfg.RequestTimeoutSeconds)*time.Second, logger, cfg.Debug))
 
 	r.Mount("/health", health.Router(health.Config{
 		Checks:         opts.HealthChecks,
