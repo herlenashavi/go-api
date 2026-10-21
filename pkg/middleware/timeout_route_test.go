@@ -66,3 +66,31 @@ func TestTimeout_TimedOutHandlerDoesNotRaceOuterMiddleware(t *testing.T) {
 		t.Fatalf("status = %d, want 503", rec.Code)
 	}
 }
+
+// TestTimeout_TimedOutRequestKeepsRoutePattern: a timed-out request's
+// routing result is discarded with Timeout's private route context, so its
+// label has to be looked up again — without that it fell back to the raw
+// path, minting a metric series per ID exactly when the service is
+// overloaded and timing out.
+func TestTimeout_TimedOutRequestKeepsRoutePattern(t *testing.T) {
+	var buf bytes.Buffer
+	release := make(chan struct{})
+	finished := make(chan struct{})
+	h := timeoutRouter(&buf, 10*time.Millisecond, func(w http.ResponseWriter, r *http.Request) {
+		defer close(finished)
+		<-release
+	})
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/items/7", nil))
+	close(release)
+	<-finished
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", rec.Code)
+	}
+	line := findLine(t, logLines(t, &buf), "request completed")
+	if line["route"] != "/items/{id}" {
+		t.Fatalf("route = %v, want the pattern /items/{id}", line["route"])
+	}
+}

@@ -99,10 +99,11 @@ func TestAccessLog_LogsRoutePatternNotResolvedPath(t *testing.T) {
 	}
 }
 
-// TestAccessLog_FallsBackToPathWithoutRoutingMetadata covers routePattern's
+// TestAccessLog_UnmatchedWithoutRoutingMetadata covers routePattern's
 // non-chi path — a handler tested directly, or mounted on a plain
-// http.ServeMux — where there is no pattern to report.
-func TestAccessLog_FallsBackToPathWithoutRoutingMetadata(t *testing.T) {
+// http.ServeMux — where there is no pattern to report: the route label is
+// the fixed "unmatched", and the path goes in its own field.
+func TestAccessLog_UnmatchedWithoutRoutingMetadata(t *testing.T) {
 	var buf bytes.Buffer
 	h := AccessLog(AccessLogConfig{Logger: jsonLogger(&buf, slog.LevelInfo)})(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
@@ -111,8 +112,48 @@ func TestAccessLog_FallsBackToPathWithoutRoutingMetadata(t *testing.T) {
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/no/chi/here", nil))
 
 	line := findLine(t, logLines(t, &buf), "request completed")
-	if line["route"] != "/no/chi/here" {
-		t.Fatalf("route = %v, want the raw path as a fallback", line["route"])
+	if line["route"] != unmatchedRoute {
+		t.Fatalf("route = %v, want %q", line["route"], unmatchedRoute)
+	}
+	if line["path"] != "/no/chi/here" {
+		t.Fatalf("path = %v, want the raw path in its own field", line["path"])
+	}
+}
+
+// TestAccessLog_NotFoundIsLabeledUnmatched is the label-cardinality
+// property for 404s: a client can request any path it likes, so labeling
+// by path would let a scanner mint one metric series per request.
+func TestAccessLog_NotFoundIsLabeledUnmatched(t *testing.T) {
+	var buf bytes.Buffer
+	r := chi.NewRouter()
+	r.Use(AccessLog(AccessLogConfig{Logger: jsonLogger(&buf, slog.LevelInfo)}))
+	r.Get("/v1/heroes/{id}", func(w http.ResponseWriter, r *http.Request) {})
+
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/wp-admin/probe-8f3a", nil))
+
+	line := findLine(t, logLines(t, &buf), "request completed")
+	if line["status"] != float64(http.StatusNotFound) {
+		t.Fatalf("status = %v, want 404", line["status"])
+	}
+	if line["route"] != unmatchedRoute {
+		t.Fatalf("route = %v, want %q", line["route"], unmatchedRoute)
+	}
+}
+
+// TestAccessLog_MatchedRouteOmitsPath: the path field is only for
+// requests with no pattern; a matched route's line stays as it was.
+func TestAccessLog_MatchedRouteOmitsPath(t *testing.T) {
+	var buf bytes.Buffer
+	r := chi.NewRouter()
+	r.Use(AccessLog(AccessLogConfig{Logger: jsonLogger(&buf, slog.LevelInfo)}))
+	r.Get("/v1/heroes/{id}", func(w http.ResponseWriter, r *http.Request) {})
+
+	r.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/v1/heroes/abc-123", nil))
+
+	line := findLine(t, logLines(t, &buf), "request completed")
+	if _, ok := line["path"]; ok {
+		t.Fatalf("matched route logged a path field: %+v", line)
 	}
 }
 

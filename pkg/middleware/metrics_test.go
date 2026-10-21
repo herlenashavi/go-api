@@ -117,6 +117,34 @@ func TestMetrics_RecordsRequestLabeledByRoutePattern(t *testing.T) {
 	}
 }
 
+// TestMetrics_UnmatchedPathsShareOneSeries: requests that match no route
+// are client-chosen paths. Labeling each by its path would let anyone
+// scanning random URLs grow the metric series (and the memory holding
+// them) without bound, unauthenticated.
+func TestMetrics_UnmatchedPathsShareOneSeries(t *testing.T) {
+	mw, reader := metricsHarness(t, nil)
+
+	r := chi.NewRouter()
+	r.Use(mw)
+	r.Get("/v1/heroes/{id}", func(w http.ResponseWriter, r *http.Request) {})
+
+	for _, p := range []string{"/wp-admin", "/.env", "/probe/8f3a"} {
+		r.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, p, nil))
+	}
+
+	sum := requireMetric(t, reader, "http.server.requests").Data.(metricdata.Sum[int64])
+	if len(sum.DataPoints) != 1 {
+		t.Fatalf("got %d data points, want 1 — unmatched paths must share a series", len(sum.DataPoints))
+	}
+	dp := sum.DataPoints[0]
+	if got := attrValue(t, dp.Attributes, "http.route").AsString(); got != unmatchedRoute {
+		t.Errorf("http.route = %q, want %q", got, unmatchedRoute)
+	}
+	if dp.Value != 3 {
+		t.Errorf("count = %d, want 3", dp.Value)
+	}
+}
+
 // TestMetrics_SeparatesSeriesByStatus is the "Errors" half of RED: a 500
 // and a 200 on the same route have to be distinguishable, or no error-rate
 // alert can be built on this.
