@@ -56,13 +56,19 @@ func AccessLog(cfg AccessLogConfig) func(http.Handler) http.Handler {
 			duration := time.Since(start)
 
 			route := routePattern(r)
-			logger.LogAttrs(r.Context(), slog.LevelInfo, "request completed",
+			attrs := []slog.Attr{
 				slog.String("method", r.Method),
 				slog.String("route", route),
 				slog.Int("status", sw.status),
 				slog.Int64("duration_ms", duration.Milliseconds()),
 				slog.Int("bytes", sw.bytes),
-			)
+			}
+			if route == unmatchedRoute {
+				// No pattern to say what was requested, so log the path
+				// itself — in its own field, never as the route label.
+				attrs = append(attrs, slog.String("path", r.URL.Path))
+			}
+			logger.LogAttrs(r.Context(), slog.LevelInfo, "request completed", attrs...)
 		})
 	}
 }
@@ -85,16 +91,37 @@ func shouldIgnore(path string, ignorePaths []string) bool {
 	return false
 }
 
-// routePattern returns the matched chi route pattern, falling back to the
-// raw path if routing metadata isn't available (e.g. in unit tests that
-// call a handler directly without going through a chi.Mux).
+// unmatchedRoute labels a request no route pattern is known for.
+const unmatchedRoute = "unmatched"
+
+// routePattern returns the chi route pattern for r — the label AccessLog,
+// Metrics, and Tracing all use — and never the raw path: a path carries
+// IDs and whatever else a client puts in it, so labeling by it would give
+// every 404 from a scanner its own metric series.
+//
+// The pattern normally comes from routing. A request that timed out never
+// gets one (Timeout routes on a private copy of the route context that is
+// discarded on timeout), so it's looked up from the router directly. A
+// request that matches no route at all — a 404, a 405, or a handler
+// called without a chi.Mux — is labeled unmatchedRoute.
 func routePattern(r *http.Request) string {
-	if rctx := chi.RouteContext(r.Context()); rctx != nil {
-		if p := rctx.RoutePattern(); p != "" {
+	rctx := chi.RouteContext(r.Context())
+	if rctx == nil {
+		return unmatchedRoute
+	}
+	if p := rctx.RoutePattern(); p != "" {
+		return p
+	}
+	if rctx.Routes != nil {
+		path := r.URL.RawPath
+		if path == "" {
+			path = r.URL.Path
+		}
+		if p := rctx.Routes.Find(chi.NewRouteContext(), r.Method, path); p != "" {
 			return p
 		}
 	}
-	return r.URL.Path
+	return unmatchedRoute
 }
 
 // maxLoggedBodyBytes bounds both how much of a body is logged and how much

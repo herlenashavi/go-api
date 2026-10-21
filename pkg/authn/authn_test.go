@@ -118,3 +118,23 @@ func TestMiddleware_BearerSchemeIsCaseInsensitive(t *testing.T) {
 		}
 	}
 }
+
+func TestUsesPublicDevSecret(t *testing.T) {
+	cases := []struct {
+		name     string
+		verifier authn.Verifier
+		want     bool
+	}{
+		{"default secret", authn.NewHMACVerifier([]byte(authn.DefaultDevSecret), authn.ClaimsConfig{}), true},
+		{"empty secret", authn.NewHMACVerifier(nil, authn.ClaimsConfig{}), true},
+		{"own secret", authn.NewHMACVerifier([]byte("s3cret-from-a-vault"), authn.ClaimsConfig{}), false},
+		{"no verifier", nil, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := authn.UsesPublicDevSecret(tc.verifier); got != tc.want {
+				t.Fatalf("UsesPublicDevSecret = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

@@ -48,7 +48,9 @@ service actually needs:
 - `SERVICE_NAME` — defaults to `{{.ServiceName}}` if unset.
 {{if .DB}}- `DATABASE_URL` — required; a `postgres://` connection string.
 {{end}}{{if eq .Authn "hmac"}}- `DEV_JWT_SECRET` — signs/verifies dev tokens (see `authn.NewHMACVerifier`'s
-  doc comment on why this is dev-only, never a production auth path).
+  doc comment on why this is dev-only, never a production auth path). Its
+  default is published, so the service refuses to start with it unless
+  `DEBUG=true`.
 {{end}}{{if eq .Authn "jwt"}}- `JWKS_URL`, `JWT_ISSUER`, `JWT_AUDIENCE` — required; this service verifies
   bearer tokens against a real JWKS endpoint.
 {{end}}{{if .Authz}}- `POLICY_DIR` — defaults to `./policies`; edit `policies/{{.ServiceName}}.cedar`

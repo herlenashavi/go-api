@@ -141,6 +141,15 @@ func (a *App) GRPCAddr() string {
 func New(ctx context.Context, opts Options) (*App, error) {
 	cfg := opts.Config
 
+	// The dev HMAC verifier with its published default secret is what
+	// `go-api new` generates by default, so a service deployed unchanged
+	// would accept tokens anyone can forge. Allow it only in debug mode,
+	// the same condition the /dev/token endpoint is gated on.
+	if authn.UsesPublicDevSecret(opts.Verifier) && !cfg.Debug {
+		return nil, fmt.Errorf("app: the HMAC verifier's secret is empty or the published default %q, so anyone could forge tokens; "+
+			"set DEV_JWT_SECRET, use authn.NewJWTVerifier, or set DEBUG=true for local development", authn.DefaultDevSecret)
+	}
+
 	logger := logging.New(logging.Config{
 		Level:       cfg.LogLevel,
 		ServiceName: cfg.ServiceName,

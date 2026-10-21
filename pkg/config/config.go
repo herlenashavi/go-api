@@ -99,7 +99,10 @@ type Base struct {
 	// for local dev and example services, where "works out of the box"
 	// beats a random value nobody can reproduce. Set DEV_JWT_SECRET
 	// yourself to any value and every service that reads it will mint and
-	// verify tokens consistently.
+	// verify tokens consistently. Because the default is public, app.New
+	// refuses an HMAC verifier using it (or an empty secret) unless Debug
+	// is set — see authn.UsesPublicDevSecret. Keep this default in sync
+	// with authn.DefaultDevSecret.
 	DevJWTSecret string `env:"DEV_JWT_SECRET" envDefault:"dev-secret-change-me"`
 
 	// Authz: Cedar policy source.

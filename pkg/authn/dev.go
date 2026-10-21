@@ -28,6 +28,20 @@ type hmacVerifier struct {
 	claims ClaimsConfig
 }
 
+// DefaultDevSecret is config.Base.DevJWTSecret's default. It is published
+// in this repository, so a verifier using it accepts tokens anyone can
+// sign — for any subject, with any roles.
+const DefaultDevSecret = "dev-secret-change-me"
+
+// UsesPublicDevSecret reports whether v is an HMAC verifier whose secret
+// is empty or DefaultDevSecret, i.e. one that accepts forged tokens.
+// app.New refuses to build an app around such a verifier outside debug
+// mode.
+func UsesPublicDevSecret(v Verifier) bool {
+	h, ok := v.(*hmacVerifier)
+	return ok && (len(h.secret) == 0 || string(h.secret) == DefaultDevSecret)
+}
+
 func (v *hmacVerifier) Verify(_ context.Context, tokenString string) (*Principal, error) {
 	keyFunc := func(t *jwt.Token) (interface{}, error) {
 		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {

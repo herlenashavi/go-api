@@ -4,6 +4,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/herlenashavi/go-api/pkg/authn"
 	"github.com/herlenashavi/go-api/pkg/config"
 )
 
@@ -160,4 +161,21 @@ func TestMustLoad_PanicsOnError(t *testing.T) {
 		}
 	}()
 	config.MustLoad[config.Base]()
+}
+
+// TestLoad_DevJWTSecretDefaultIsAuthnsKnownDefault: app.New refuses the
+// HMAC verifier with authn.DefaultDevSecret outside debug mode, which only
+// protects anything if that constant is the value DEV_JWT_SECRET actually
+// defaults to here.
+func TestLoad_DevJWTSecretDefaultIsAuthnsKnownDefault(t *testing.T) {
+	t.Setenv("SERVICE_NAME", "svc")
+	unsetEnv(t, "DEV_JWT_SECRET")
+
+	cfg, err := config.Load[config.Base]()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.DevJWTSecret != authn.DefaultDevSecret {
+		t.Fatalf("DevJWTSecret default = %q, want authn.DefaultDevSecret %q", cfg.DevJWTSecret, authn.DefaultDevSecret)
+	}
 }

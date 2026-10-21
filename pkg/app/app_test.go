@@ -198,3 +198,33 @@ func mustGet(t *testing.T, url string, wantStatus int) {
 		t.Fatalf("GET %s: status = %d, want %d", url, resp.StatusCode, wantStatus)
 	}
 }
+
+// TestNew_RefusesPublicDevSecretOutsideDebug: `go-api new` generates the
+// HMAC verifier by default, reading DEV_JWT_SECRET, whose default is
+// published. A service deployed without setting it must fail to start
+// rather than accept tokens anyone can sign.
+func TestNew_RefusesPublicDevSecretOutsideDebug(t *testing.T) {
+	for _, secret := range []string{authn.DefaultDevSecret, ""} {
+		verifier := authn.NewHMACVerifier([]byte(secret), authn.ClaimsConfig{})
+		_, err := app.New(t.Context(), app.Options{Config: testConfig(), Verifier: verifier})
+		if err == nil {
+			t.Fatalf("app.New accepted the HMAC verifier with secret %q outside debug mode", secret)
+		}
+	}
+}
+
+func TestNew_AllowsPublicDevSecretInDebug(t *testing.T) {
+	cfg := testConfig()
+	cfg.Debug = true
+	verifier := authn.NewHMACVerifier([]byte(authn.DefaultDevSecret), authn.ClaimsConfig{})
+	if _, err := app.New(t.Context(), app.Options{Config: cfg, Verifier: verifier}); err != nil {
+		t.Fatalf("app.New in debug mode: %v", err)
+	}
+}
+
+func TestNew_AllowsOwnDevSecretOutsideDebug(t *testing.T) {
+	verifier := authn.NewHMACVerifier([]byte("s3cret-from-a-vault"), authn.ClaimsConfig{})
+	if _, err := app.New(t.Context(), app.Options{Config: testConfig(), Verifier: verifier}); err != nil {
+		t.Fatalf("app.New with a non-default secret: %v", err)
+	}
+}

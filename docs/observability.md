@@ -20,7 +20,10 @@ and metrics, W3C `traceparent` + baggage propagation, parent-based ratio
 sampling. Prometheus exposition (`/health/metrics`) is always on,
 independent of OTLP. HTTP RED metrics
 (`http.server.requests`/`duration`/`active_requests`) are labeled by
-route *pattern*, not the resolved path, to keep cardinality bounded.
+route *pattern*, not the resolved path, to keep cardinality bounded. A
+request that matches no route (a 404 or 405) is labeled `unmatched`
+rather than by its path, since a client can send any path it likes; the
+access log line for it carries the path in a separate `path` field.
 
 Custom business metrics use the same `Meter` — see
 [Custom Metrics](metrics.md) for the pattern and its cardinality rules.

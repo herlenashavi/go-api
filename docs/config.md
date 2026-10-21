@@ -36,6 +36,13 @@ your IdP minted for any *other* application on the same tenant would be
 accepted. Every verified token (JWT or the dev HMAC one) must also carry
 an `exp` claim.
 
+`DEV_JWT_SECRET`, by contrast, *does* have a default — but it's published
+in this repository, so a dev HMAC verifier using it accepts tokens anyone
+can sign. `app.New` therefore refuses to start with that default (or an
+empty secret) unless `DEBUG=true`, the same switch that mounts the
+`/dev/token` endpoint. Outside debug mode, set your own `DEV_JWT_SECRET` —
+or better, switch to `authn.NewJWTVerifier`.
+
 ### HTTP server timeouts
 
 Three settings bound how long a connection can hold the server, each
