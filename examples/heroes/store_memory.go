@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -34,7 +36,11 @@ func (s *MemoryHeroStore) List(_ context.Context, params crud.ListParams) (crud.
 
 	matched := make([]Hero, 0, len(s.heroes))
 	for _, h := range s.heroes {
-		if matchesAll(h, params.Filters) {
+		ok, err := matchesAll(h, params.Filters)
+		if err != nil {
+			return crud.ListResult[Hero]{}, err
+		}
+		if ok {
 			matched = append(matched, h)
 		}
 	}
@@ -53,37 +59,50 @@ func (s *MemoryHeroStore) List(_ context.Context, params crud.ListParams) (crud.
 	return result, nil
 }
 
-func matchesAll(h Hero, filters []crud.Filter) bool {
+func matchesAll(h Hero, filters []crud.Filter) (bool, error) {
 	for _, f := range filters {
-		if !matchesOne(h, f) {
-			return false
+		ok, err := matchesOne(h, f)
+		if err != nil || !ok {
+			return false, err
 		}
 	}
-	return true
+	return true, nil
 }
 
-func matchesOne(h Hero, f crud.Filter) bool {
+// matchesOne mirrors PGHeroStore's buildWhere: every op crud accepts is
+// implemented, and an unknown field or op is a 400 — never silently
+// "matches everything", which would return rows the client filtered out.
+func matchesOne(h Hero, f crud.Filter) (bool, error) {
+	var actual string
 	switch f.Field {
 	case "status":
-		switch f.Op {
-		case "eq":
-			return string(h.Status) == f.Value
-		case "ne":
-			return string(h.Status) != f.Value
-		case "in":
-			for _, v := range strings.Split(f.Value, ",") {
-				if string(h.Status) == v {
-					return true
-				}
-			}
-			return false
-		}
+		actual = string(h.Status)
 	case "name":
-		if f.Op == "like" {
-			return strings.Contains(strings.ToLower(h.Name), strings.ToLower(f.Value))
-		}
+		actual = h.Name
+	default:
+		return false, problem.BadRequest(fmt.Sprintf("field %q is not filterable", f.Field))
 	}
-	return true // an allowlisted-but-unhandled (field, op) pair matches everything rather than erroring
+
+	switch f.Op {
+	case "eq":
+		return actual == f.Value, nil
+	case "ne":
+		return actual != f.Value, nil
+	case "lt":
+		return actual < f.Value, nil
+	case "lte":
+		return actual <= f.Value, nil
+	case "gt":
+		return actual > f.Value, nil
+	case "gte":
+		return actual >= f.Value, nil
+	case "in":
+		return slices.Contains(strings.Split(f.Value, ","), actual), nil
+	case "like":
+		return strings.Contains(strings.ToLower(actual), strings.ToLower(f.Value)), nil
+	default:
+		return false, problem.BadRequest(fmt.Sprintf("filter operator %q is not supported", f.Op))
+	}
 }
 
 func sortHeroes(heroes []Hero, fields []crud.SortField) {
@@ -197,13 +216,17 @@ func (s *MemoryHeroStore) Delete(_ context.Context, id string) error {
 // Retire is a hand-written, non-CRUD operation on the same store — the
 // kind of thing that doesn't fit Store's five methods and is exactly why
 // crud.Resource is opt-in rather than the only way to expose a resource.
-// See retire.go for the route built on top of this.
-func (s *MemoryHeroStore) Retire(_ context.Context, id uuid.UUID) (Hero, error) {
+// See retire.go for the route built on top of this, and heroStore.Retire
+// for why expected exists.
+func (s *MemoryHeroStore) Retire(_ context.Context, id uuid.UUID, expected HeroStatus) (Hero, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	h, ok := s.heroes[id]
 	if !ok {
 		return Hero{}, problem.NotFound("Hero")
+	}
+	if h.Status != expected {
+		return Hero{}, heroStatusChanged()
 	}
 	h.Status = HeroStatusRetired
 	h.ModifiedAt = time.Now().UTC()

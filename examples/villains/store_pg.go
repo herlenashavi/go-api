@@ -92,9 +92,7 @@ func (s *VillainPGStore) Capture(ctx context.Context, id string) (Villain, error
 }
 
 func (s *VillainPGStore) List(ctx context.Context, statusFilter villainsv1.VillainStatus, limit, offset int) ([]Villain, int, error) {
-	if limit <= 0 {
-		limit = 20
-	}
+	limit, offset = normalizePage(limit, offset)
 
 	where := ""
 	var args []any

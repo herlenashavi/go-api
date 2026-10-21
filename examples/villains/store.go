@@ -24,6 +24,23 @@ type VillainStore struct {
 	villains map[string]Villain
 }
 
+const (
+	defaultPageSize = 20
+	maxPageSize     = 100
+)
+
+// normalizePage bounds ListVillainsRequest's client-supplied paging the
+// same way crud.Resource bounds its HTTP list endpoints (default 20, max
+// 100), for both stores: limit and offset arrive straight off the wire as
+// int32s, so without this a caller could ask for 2^31 rows in one RPC, and
+// a negative offset would slice out of range in VillainStore.
+func normalizePage(limit, offset int) (int, int) {
+	if limit <= 0 {
+		limit = defaultPageSize
+	}
+	return min(limit, maxPageSize), max(offset, 0)
+}
+
 func NewVillainStore() *VillainStore {
 	return &VillainStore{villains: make(map[string]Villain)}
 }
@@ -44,9 +61,7 @@ func (s *VillainStore) List(_ context.Context, statusFilter villainsv1.VillainSt
 	sort.Slice(matched, func(i, j int) bool { return matched[i].Name < matched[j].Name })
 
 	total := len(matched)
-	if limit <= 0 {
-		limit = 20
-	}
+	limit, offset = normalizePage(limit, offset)
 	start := min(offset, len(matched))
 	end := min(start+limit, len(matched))
 	return matched[start:end], total, nil

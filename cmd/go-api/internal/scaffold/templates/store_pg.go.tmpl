@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
 	"github.com/herlenashavi/go-api/pkg/crud"
@@ -40,7 +41,22 @@ func scan{{.Name}}(row pgx.Row) ({{.Name}}, error) {
 	return v, err
 }
 
+// parse{{.Name}}ID rejects a non-UUID id before it reaches Postgres, which
+// would otherwise fail the uuid cast with a server error — a 500 for what
+// is really a malformed request.
+func parse{{.Name}}ID(id string) (string, error) {
+	parsed, err := uuid.Parse(id)
+	if err != nil {
+		return "", problem.BadRequest("id is not a valid UUID")
+	}
+	return parsed.String(), nil
+}
+
 func (s *{{.Name}}PGStore) Get(ctx context.Context, id string) ({{.Name}}, error) {
+	id, err := parse{{.Name}}ID(id)
+	if err != nil {
+		return {{.Name}}{}, err
+	}
 	v, err := scan{{.Name}}(s.pool.QueryRow(ctx, `SELECT `+{{.Lower}}Columns+` FROM {{.Plural}} WHERE id = $1`, id))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -65,6 +81,10 @@ func (s *{{.Name}}PGStore) Create(ctx context.Context, in Create{{.Name}}) ({{.N
 }
 
 func (s *{{.Name}}PGStore) Update(ctx context.Context, id string, in Update{{.Name}}) ({{.Name}}, error) {
+	id, err := parse{{.Name}}ID(id)
+	if err != nil {
+		return {{.Name}}{}, err
+	}
 	v, err := scan{{.Name}}(s.pool.QueryRow(ctx,
 		`UPDATE {{.Plural}} SET
 		   name = COALESCE($2, name),
@@ -83,6 +103,10 @@ func (s *{{.Name}}PGStore) Update(ctx context.Context, id string, in Update{{.Na
 }
 
 func (s *{{.Name}}PGStore) Delete(ctx context.Context, id string) error {
+	id, err := parse{{.Name}}ID(id)
+	if err != nil {
+		return err
+	}
 	tag, err := s.pool.Exec(ctx, `DELETE FROM {{.Plural}} WHERE id = $1`, id)
 	if err != nil {
 		return fmt.Errorf("delete {{.Lower}}: %w", err)
@@ -98,7 +122,10 @@ var {{.Lower}}FilterColumns = map[string]string{
 }
 
 func (s *{{.Name}}PGStore) List(ctx context.Context, params crud.ListParams) (crud.ListResult[{{.Name}}], error) {
-	where, args := {{.Lower}}BuildWhere(params.Filters)
+	where, args, err := {{.Lower}}BuildWhere(params.Filters)
+	if err != nil {
+		return crud.ListResult[{{.Name}}]{}, err
+	}
 	orderBy := {{.Lower}}BuildOrderBy(params.Sort)
 
 	query := `SELECT ` + {{.Lower}}Columns + ` FROM {{.Plural}}` + where + orderBy +
@@ -135,31 +162,48 @@ func (s *{{.Name}}PGStore) List(ctx context.Context, params crud.ListParams) (cr
 	return result, nil
 }
 
-func {{.Lower}}BuildWhere(filters []crud.Filter) (string, []any) {
+// {{.Lower}}ComparisonOps maps crud's comparison filter ops to their SQL
+// operator; "in" and "like" need their own clause shapes.
+var {{.Lower}}ComparisonOps = map[string]string{
+	"eq": "=", "ne": "!=", "lt": "<", "lte": "<=", "gt": ">", "gte": ">=",
+}
+
+var {{.Lower}}LikeEscaper = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+
+// {{.Lower}}BuildWhere turns crud's allowlisted filters into a parameterized
+// WHERE clause. Every op crud accepts is implemented; an unknown op or
+// field is a 400 — never silently treated as equality or dropped, either
+// of which returns the wrong rows with no error.
+func {{.Lower}}BuildWhere(filters []crud.Filter) (string, []any, error) {
 	if len(filters) == 0 {
-		return "", nil
+		return "", nil, nil
 	}
 	var clauses []string
 	var args []any
 	for _, f := range filters {
 		column, ok := {{.Lower}}FilterColumns[f.Field]
 		if !ok {
-			continue // defense in depth: crud already allowlisted this, but never trust it twice
+			// crud already allowlisted this field, but never trust it twice.
+			return "", nil, problem.BadRequest(fmt.Sprintf("field %q is not filterable", f.Field))
 		}
-		args = append(args, f.Value)
 		switch f.Op {
-		case "ne":
-			clauses = append(clauses, fmt.Sprintf("%s != $%d", column, len(args)))
+		case "in":
+			args = append(args, strings.Split(f.Value, ","))
+			clauses = append(clauses, fmt.Sprintf("%s = ANY($%d)", column, len(args)))
 		case "like":
-			clauses = append(clauses, fmt.Sprintf("%s ILIKE '%%' || $%d || '%%'", column, len(args)))
-		default: // eq
-			clauses = append(clauses, fmt.Sprintf("%s = $%d", column, len(args)))
+			// Escaped so "%" and "_" in the value match literally.
+			args = append(args, {{.Lower}}LikeEscaper.Replace(f.Value))
+			clauses = append(clauses, fmt.Sprintf(`%s ILIKE '%%' || $%d || '%%' ESCAPE '\'`, column, len(args)))
+		default:
+			sqlOp, ok := {{.Lower}}ComparisonOps[f.Op]
+			if !ok {
+				return "", nil, problem.BadRequest(fmt.Sprintf("filter operator %q is not supported", f.Op))
+			}
+			args = append(args, f.Value)
+			clauses = append(clauses, fmt.Sprintf("%s %s $%d", column, sqlOp, len(args)))
 		}
 	}
-	if len(clauses) == 0 {
-		return "", nil
-	}
-	return " WHERE " + strings.Join(clauses, " AND "), args
+	return " WHERE " + strings.Join(clauses, " AND "), args, nil
 }
 
 func {{.Lower}}BuildOrderBy(sortFields []crud.SortField) string {
