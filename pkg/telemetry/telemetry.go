@@ -15,7 +15,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
 	otlpmetricgrpc "go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
 	otlptracegrpc "go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	otelprom "go.opentelemetry.io/otel/exporters/prometheus"
@@ -101,17 +100,9 @@ func New(ctx context.Context, cfg Config) (*Provider, error) {
 	}
 
 	p.Tracer = p.TracerProvider.Tracer(cfg.ServiceName)
-	meter, err := nameOrNoop(p.MeterProvider, cfg.ServiceName)
-	if err != nil {
-		return nil, err
-	}
-	p.Meter = meter
+	p.Meter = p.MeterProvider.Meter(cfg.ServiceName)
 
 	return p, nil
-}
-
-func nameOrNoop(mp metric.MeterProvider, name string) (metric.Meter, error) {
-	return mp.Meter(name), nil
 }
 
 func (p *Provider) setupTracing(ctx context.Context, cfg Config, res *resource.Resource) error {
@@ -212,7 +203,3 @@ func TraceLogFields(ctx context.Context) []slog.Attr {
 	}
 	return attrs
 }
-
-// Attr is a small convenience re-export so callers building resource/span
-// attributes don't need a direct otel/attribute import for simple cases.
-var Attr = attribute.String
