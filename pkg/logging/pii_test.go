@@ -3,6 +3,8 @@ package logging_test
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 	"regexp"
 	"strings"
@@ -439,6 +441,48 @@ func TestPII_MapAnyValueRedactedByKeyAndPattern(t *testing.T) {
 	bio := profile["bio"].(string)
 	if strings.Contains(bio, "@") {
 		t.Fatalf("bio = %q, embedded email was not redacted", bio)
+	}
+}
+
+// TestPII_ErrorValueIsRedacted covers `"error", err` — the most common
+// attribute there is. slog stores an error as KindAny, and the JSON
+// handler renders err.Error() *after* piiHandler has run, so without an
+// explicit error case its message reached the log unscanned.
+func TestPII_ErrorValueIsRedacted(t *testing.T) {
+	logger, buf := newTestLogger(t)
+	err := fmt.Errorf("insert user: %w",
+		errors.New("duplicate key email=alice@example.com card 4111 1111 1111 1111"))
+	logger.Error("op failed", "error", err)
+
+	got := decodeLines(t, buf)[0]["error"].(string)
+	for _, leaked := range []string{"alice@example.com", "4111 1111 1111 1111"} {
+		if strings.Contains(got, leaked) {
+			t.Fatalf("error = %q, still contains %q", got, leaked)
+		}
+	}
+	for _, marker := range []string{"[REDACTED_EMAIL]", "[REDACTED_CREDIT_CARD]"} {
+		if !strings.Contains(got, marker) {
+			t.Fatalf("error = %q, want %s", got, marker)
+		}
+	}
+	if !strings.HasPrefix(got, "insert user: duplicate key") {
+		t.Fatalf("error = %q, non-PII text should survive", got)
+	}
+}
+
+func TestPII_ErrorValueInsideAMapIsRedacted(t *testing.T) {
+	logger, buf := newTestLogger(t)
+	logger.Info("batch", "result", map[string]any{
+		"failed": errors.New("could not reach bob@example.org"),
+	})
+
+	result := decodeLines(t, buf)[0]["result"].(map[string]any)
+	got, ok := result["failed"].(string)
+	if !ok {
+		t.Fatalf("result.failed = %#v, want the redacted error text", result["failed"])
+	}
+	if strings.Contains(got, "@") || !strings.Contains(got, "[REDACTED_EMAIL]") {
+		t.Fatalf("result.failed = %q, email was not redacted", got)
 	}
 }
 
