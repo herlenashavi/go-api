@@ -91,10 +91,26 @@ func parseLevel(level string) slog.Level {
 // redaction-scanned exactly like everything else. It does not redact
 // anything itself; that's piiHandler's job, kept separate so this type
 // stays about one thing (context enrichment).
+//
+// It tracks the logger's With/WithGroup chain itself (in scopes) rather
+// than delegating it to next. Delegating would open the groups on next,
+// so service/env and fielder attrs (request_id, trace_id, actor) added at
+// Handle time would land *inside* whatever group was open —
+// logger.WithGroup("db") would bury request_id under "db" and break every
+// log query that filters on it. Instead Handle nests the caller's attrs
+// under their groups itself and adds the correlation attrs at the root.
 type contextHandler struct {
 	next      slog.Handler
 	fielders  []Fielder
 	baseAttrs []slog.Attr
+	scopes    []scope
+}
+
+// scope is one With or WithGroup call, in the order they were made: a
+// group name opens a group, attrs are bound at the current nesting level.
+type scope struct {
+	group string
+	attrs []slog.Attr
 }
 
 func (h *contextHandler) Enabled(ctx context.Context, level slog.Level) bool {
@@ -102,21 +118,60 @@ func (h *contextHandler) Enabled(ctx context.Context, level slog.Level) bool {
 }
 
 func (h *contextHandler) Handle(ctx context.Context, record slog.Record) error {
-	record.AddAttrs(h.baseAttrs...)
+	attrs := make([]slog.Attr, 0, record.NumAttrs())
+	record.Attrs(func(a slog.Attr) bool {
+		attrs = append(attrs, a)
+		return true
+	})
+	// Fold the scopes innermost-first: attrs bound by With prepend at their
+	// level, a group wraps everything nested beneath it. An empty group is
+	// dropped, matching slog's own handlers.
+	for i := len(h.scopes) - 1; i >= 0; i-- {
+		s := h.scopes[i]
+		if s.group == "" {
+			attrs = append(append([]slog.Attr{}, s.attrs...), attrs...)
+			continue
+		}
+		if len(attrs) == 0 {
+			continue
+		}
+		attrs = []slog.Attr{{Key: s.group, Value: slog.GroupValue(attrs...)}}
+	}
+
+	out := slog.NewRecord(record.Time, record.Level, record.Message, record.PC)
+	out.AddAttrs(attrs...)
+	out.AddAttrs(h.baseAttrs...)
 	for _, f := range h.fielders {
-		if attrs := f(ctx); len(attrs) > 0 {
-			record.AddAttrs(attrs...)
+		if fa := f(ctx); len(fa) > 0 {
+			out.AddAttrs(fa...)
 		}
 	}
-	return h.next.Handle(ctx, record)
+	return h.next.Handle(ctx, out)
 }
 
 func (h *contextHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
-	return &contextHandler{next: h.next.WithAttrs(attrs), fielders: h.fielders, baseAttrs: h.baseAttrs}
+	if len(attrs) == 0 {
+		return h
+	}
+	return h.withScope(scope{attrs: attrs})
 }
 
 func (h *contextHandler) WithGroup(name string) slog.Handler {
-	return &contextHandler{next: h.next.WithGroup(name), fielders: h.fielders, baseAttrs: h.baseAttrs}
+	if name == "" {
+		return h
+	}
+	return h.withScope(scope{group: name})
+}
+
+func (h *contextHandler) withScope(s scope) *contextHandler {
+	scopes := make([]scope, len(h.scopes), len(h.scopes)+1)
+	copy(scopes, h.scopes)
+	return &contextHandler{
+		next:      h.next,
+		fielders:  h.fielders,
+		baseAttrs: h.baseAttrs,
+		scopes:    append(scopes, s),
+	}
 }
 
 // secretKeys are redacted by Redact, matched case-insensitively against map
