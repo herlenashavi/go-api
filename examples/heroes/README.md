@@ -110,10 +110,10 @@ curl -s localhost:8080/health/metrics | grep http_server
 | `store_pg.go` | The same interface backed by real `dbx`/pgx — used automatically when `DATABASE_URL` is set, see below |
 | `migrations/` | This service's SQL schema (`heroes`, `hero_audit_log`), embedded and applied by `migrate/` |
 | `migrate/` | A separate one-off binary that applies/rolls back `migrations/` against `DATABASE_URL` |
-| `retire.go` | A hand-written route + row-level ABAC check (loads the row, then calls `Authorizer.Check` with its real attributes) |
+| `retire.go` | A hand-written route + row-level ABAC check (loads the row, then calls `Authorizer.Check` with its real attributes; the write is conditional on the status that was authorized, so a concurrent change is a 409) |
 | `villains_client.go` | `pkg/grpcx.Dial`-based client for the villains service — tracing, request ID, and token forwarding |
 | `main.go`'s `loadMTLS` | Opt-in mutual TLS for the villains client — see villains' README |
-| `nemesis.go` | The HTTP route that calls villains over gRPC; maps its errors via `grpcx.Problem` |
+| `nemesis.go` | The HTTP route that calls villains over gRPC; authorizes `hero:read` itself (hand-written routes don't inherit crud's checks) and maps villains' errors via `grpcx.Problem` |
 | `dev_token.go` | Debug-only token minting — never do this in a real service |
 | `policies/heroes.cedar` | The actual Cedar policies enforced above |
 
