@@ -8,8 +8,11 @@ import (
 	"log/slog"
 	"net/http"
 	"runtime/debug"
+	"slices"
 	"sync"
 	"time"
+
+	"github.com/go-chi/chi/v5"
 
 	"github.com/herlenashavi/go-api/pkg/problem"
 )
@@ -37,6 +40,20 @@ func Timeout(d time.Duration, logger *slog.Logger, debugMode bool) func(http.Han
 			tw := &timeoutWriter{header: make(http.Header)}
 			done := make(chan struct{})
 
+			// chi does its routing *inside* this goroutine (Timeout is
+			// router-level middleware), mutating the request's route
+			// context as it goes. On a timeout that goroutine keeps
+			// running after we return, while the middleware outside us
+			// reads the route pattern and chi recycles the context for
+			// another request. So the goroutine gets its own copy, which
+			// is copied back only once it has finished.
+			outerRctx := chi.RouteContext(r.Context())
+			var innerRctx *chi.Context
+			if outerRctx != nil {
+				innerRctx = cloneRouteContext(outerRctx)
+				ctx = context.WithValue(ctx, chi.RouteCtxKey, innerRctx)
+			}
+
 			go func() {
 				defer close(done)
 				defer func() {
@@ -51,6 +68,9 @@ func Timeout(d time.Duration, logger *slog.Logger, debugMode bool) func(http.Han
 
 			select {
 			case <-done:
+				if innerRctx != nil {
+					*outerRctx = *innerRctx // handler has returned; safe to publish its routing result
+				}
 				tw.commit(w)
 			case <-ctx.Done():
 				tw.markTimedOut()
@@ -58,6 +78,17 @@ func Timeout(d time.Duration, logger *slog.Logger, debugMode bool) func(http.Han
 			}
 		})
 	}
+}
+
+// cloneRouteContext copies rctx so routing in Timeout's handler goroutine
+// never writes memory the request's original route context can see: the
+// exported slices routing appends to are cloned, not shared.
+func cloneRouteContext(rctx *chi.Context) *chi.Context {
+	c := *rctx
+	c.RoutePatterns = slices.Clone(rctx.RoutePatterns)
+	c.URLParams.Keys = slices.Clone(rctx.URLParams.Keys)
+	c.URLParams.Values = slices.Clone(rctx.URLParams.Values)
+	return &c
 }
 
 func timeoutProblem() *problem.Problem {
