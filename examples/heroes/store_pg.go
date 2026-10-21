@@ -1,9 +1,8 @@
 // store_pg.go shows the dbx/pgx-backed shape a real Store implementation
-// takes. It is NOT wired into main.go — this example runs on
-// MemoryHeroStore so `go run .` needs no database — but every line here
-// compiles against the real pgx driver and satisfies crud.Store exactly
-// like MemoryHeroStore does, so swapping one for the other in main.go is
-// the only change a real service needs to make.
+// takes. main.go uses it when DATABASE_URL is set and falls back to
+// MemoryHeroStore otherwise, so `go run .` still needs no database. Both
+// satisfy crud.Store (and heroStore) identically — which one main.go
+// constructs is the only difference between the two modes.
 //
 // A real service would generate the query layer with sqlc from SQL like:
 //
@@ -61,8 +60,24 @@ func scanHero(row pgx.Row) (Hero, error) {
 	return h, err
 }
 
+// parseHeroID rejects a non-UUID id before it reaches Postgres. Sent as-is,
+// Postgres refuses to cast it to the uuid column and the query fails with
+// a server error — which would surface as a 500 for what is really a
+// malformed request. 400 matches MemoryHeroStore's behavior.
+func parseHeroID(id string) (uuid.UUID, error) {
+	parsed, err := uuid.Parse(id)
+	if err != nil {
+		return uuid.UUID{}, problem.BadRequest("id is not a valid UUID")
+	}
+	return parsed, nil
+}
+
 func (s *PGHeroStore) Get(ctx context.Context, id string) (Hero, error) {
-	h, err := scanHero(s.pool.QueryRow(ctx, `SELECT `+heroColumns+` FROM heroes WHERE id = $1`, id))
+	parsed, err := parseHeroID(id)
+	if err != nil {
+		return Hero{}, err
+	}
+	h, err := scanHero(s.pool.QueryRow(ctx, `SELECT `+heroColumns+` FROM heroes WHERE id = $1`, parsed.String()))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return Hero{}, problem.NotFound("Hero")
@@ -123,6 +138,10 @@ func (s *PGHeroStore) CreateWithAudit(ctx context.Context, in CreateHero, actor 
 }
 
 func (s *PGHeroStore) Update(ctx context.Context, id string, in UpdateHero) (Hero, error) {
+	parsed, err := parseHeroID(id)
+	if err != nil {
+		return Hero{}, err
+	}
 	h, err := scanHero(s.pool.QueryRow(ctx,
 		`UPDATE heroes SET
 		   name = COALESCE($2, name),
@@ -132,7 +151,7 @@ func (s *PGHeroStore) Update(ctx context.Context, id string, in UpdateHero) (Her
 		   modified_at = now()
 		 WHERE id = $1
 		 RETURNING `+heroColumns,
-		id, in.Name, in.SuperPower, in.Status, in.NemesisVillainID,
+		parsed.String(), in.Name, in.SuperPower, in.Status, in.NemesisVillainID,
 	))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -144,7 +163,11 @@ func (s *PGHeroStore) Update(ctx context.Context, id string, in UpdateHero) (Her
 }
 
 func (s *PGHeroStore) Delete(ctx context.Context, id string) error {
-	tag, err := s.pool.Exec(ctx, `DELETE FROM heroes WHERE id = $1`, id)
+	parsed, err := parseHeroID(id)
+	if err != nil {
+		return err
+	}
+	tag, err := s.pool.Exec(ctx, `DELETE FROM heroes WHERE id = $1`, parsed.String())
 	if err != nil {
 		return fmt.Errorf("delete hero: %w", err)
 	}
@@ -183,7 +206,10 @@ var filterColumns = map[string]string{
 }
 
 func (s *PGHeroStore) List(ctx context.Context, params crud.ListParams) (crud.ListResult[Hero], error) {
-	where, args := buildWhere(params.Filters)
+	where, args, err := buildWhere(params.Filters)
+	if err != nil {
+		return crud.ListResult[Hero]{}, err
+	}
 	orderBy := buildOrderBy(params.Sort)
 
 	query := `SELECT ` + heroColumns + ` FROM heroes` + where + orderBy +
@@ -220,31 +246,56 @@ func (s *PGHeroStore) List(ctx context.Context, params crud.ListParams) (crud.Li
 	return result, nil
 }
 
-func buildWhere(filters []crud.Filter) (string, []any) {
+// comparisonOps maps crud's comparison filter ops to their SQL operator.
+// "in" and "like" need their own clause shapes and are handled separately
+// in buildWhere.
+var comparisonOps = map[string]string{
+	"eq": "=", "ne": "!=", "lt": "<", "lte": "<=", "gt": ">", "gte": ">=",
+}
+
+// buildWhere turns crud's allowlisted filters into a parameterized WHERE
+// clause. Every op crud accepts is implemented explicitly; anything else —
+// an op or a field this store doesn't know — is a 400, never silently
+// treated as equality (which would return wrong results with no error) or
+// dropped (which would return *more* rows than asked for).
+func buildWhere(filters []crud.Filter) (string, []any, error) {
 	if len(filters) == 0 {
-		return "", nil
+		return "", nil, nil
 	}
 	var clauses []string
 	var args []any
 	for _, f := range filters {
 		column, ok := filterColumns[f.Field]
 		if !ok {
-			continue // defense in depth: crud already allowlisted this, but never trust it twice
+			// crud already allowlisted this field, but never trust it twice.
+			return "", nil, problem.BadRequest(fmt.Sprintf("field %q is not filterable", f.Field))
 		}
-		args = append(args, f.Value)
 		switch f.Op {
-		case "ne":
-			clauses = append(clauses, fmt.Sprintf("%s != $%d", column, len(args)))
+		case "in":
+			args = append(args, strings.Split(f.Value, ","))
+			clauses = append(clauses, fmt.Sprintf("%s = ANY($%d)", column, len(args)))
 		case "like":
-			clauses = append(clauses, fmt.Sprintf("%s ILIKE '%%' || $%d || '%%'", column, len(args)))
-		default: // eq
-			clauses = append(clauses, fmt.Sprintf("%s = $%d", column, len(args)))
+			args = append(args, escapeLike(f.Value))
+			clauses = append(clauses, fmt.Sprintf(`%s ILIKE '%%' || $%d || '%%' ESCAPE '\'`, column, len(args)))
+		default:
+			sqlOp, ok := comparisonOps[f.Op]
+			if !ok {
+				return "", nil, problem.BadRequest(fmt.Sprintf("filter operator %q is not supported", f.Op))
+			}
+			args = append(args, f.Value)
+			clauses = append(clauses, fmt.Sprintf("%s %s $%d", column, sqlOp, len(args)))
 		}
 	}
-	if len(clauses) == 0 {
-		return "", nil
-	}
-	return " WHERE " + strings.Join(clauses, " AND "), args
+	return " WHERE " + strings.Join(clauses, " AND "), args, nil
+}
+
+var likeEscaper = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+
+// escapeLike makes a client-supplied "like" value match literally: without
+// it, "%" or "_" in the value act as wildcards (`?name__like=%` would match
+// every row).
+func escapeLike(s string) string {
+	return likeEscaper.Replace(s)
 }
 
 func buildOrderBy(sortFields []crud.SortField) string {
