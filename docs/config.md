@@ -28,6 +28,14 @@ request-body logger, [docs/logging.md](logging.md)), and in
 **not** change log format — that's always JSON, unconditionally, in
 every mode.
 
+The JWT verifier settings (`JWKS_URL`, `JWT_ISSUER`, `JWT_AUDIENCE`) have
+no defaults because there is no safe one: `authn.NewJWTVerifier` refuses
+to start without an issuer, and without an audience unless the caller
+sets `JWTVerifierConfig.SkipAudienceCheck` explicitly — otherwise a token
+your IdP minted for any *other* application on the same tenant would be
+accepted. Every verified token (JWT or the dev HMAC one) must also carry
+an `exp` claim.
+
 ## Extending it for your own service
 
 A real service almost always needs at least one setting `Base` doesn't
