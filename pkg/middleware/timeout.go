@@ -81,14 +81,21 @@ func Timeout(d time.Duration, logger *slog.Logger, debugMode bool) func(http.Han
 }
 
 // cloneRouteContext copies rctx so routing in Timeout's handler goroutine
-// never writes memory the request's original route context can see: the
-// exported slices routing appends to are cloned, not shared.
+// never writes memory the request's original route context can see. It
+// starts from a fresh chi.Context rather than a struct copy: chi's
+// unexported routeParams and methodsAllowed slices keep their capacity
+// across Reset, so a struct copy would share their backing arrays with the
+// pooled original. Those fields are empty at this point (no routing has
+// happened yet), so leaving them zero loses nothing.
 func cloneRouteContext(rctx *chi.Context) *chi.Context {
-	c := *rctx
+	c := chi.NewRouteContext()
+	c.Routes = rctx.Routes
+	c.RoutePath = rctx.RoutePath
+	c.RouteMethod = rctx.RouteMethod
 	c.RoutePatterns = slices.Clone(rctx.RoutePatterns)
 	c.URLParams.Keys = slices.Clone(rctx.URLParams.Keys)
 	c.URLParams.Values = slices.Clone(rctx.URLParams.Values)
-	return &c
+	return c
 }
 
 func timeoutProblem() *problem.Problem {
