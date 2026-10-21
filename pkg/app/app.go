@@ -13,6 +13,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -129,8 +130,14 @@ func (a *App) GRPCAddr() string {
 
 // New assembles an App: logging, OTel tracing/metrics, the default
 // middleware chain (request ID, panic recovery, tracing, RED metrics,
-// access log, timeout, body limit, CORS, security headers), and
+// body limit, access log, CORS, security headers, timeout), and
 // /health/{liveness,readiness,metrics}.
+//
+// Two orderings in that chain are load-bearing. BodyLimit sits ahead of
+// AccessLog so debug-mode request-body logging only ever sees a bounded
+// body. CORS and SecurityHeaders sit ahead of Timeout so their headers are
+// set on the real ResponseWriter, not on Timeout's buffer — which is
+// discarded when a request times out, leaving the 503 without them.
 func New(ctx context.Context, opts Options) (*App, error) {
 	cfg := opts.Config
 
@@ -165,19 +172,20 @@ func New(ctx context.Context, opts Options) (*App, error) {
 	r.Use(middleware.Recover(logger, cfg.Debug))
 	r.Use(middleware.Tracing(tp.Tracer, tp.Propagator))
 	r.Use(middleware.Metrics(middleware.MetricsConfig{Metrics: httpMetrics, IgnorePaths: healthIgnore}))
+	r.Use(middleware.BodyLimit(cfg.MaxBodyBytes))
 	r.Use(middleware.AccessLog(middleware.AccessLogConfig{
 		Logger:         logger,
 		IgnorePaths:    healthIgnore,
 		LogRequestBody: cfg.Debug,
 	}))
-	r.Use(middleware.Timeout(time.Duration(cfg.RequestTimeoutSeconds)*time.Second, logger, cfg.Debug))
-	r.Use(middleware.BodyLimit(cfg.MaxBodyBytes))
 	r.Use(middleware.CORS(cfg.CORSAllowedOrigins))
 	r.Use(middleware.SecurityHeaders(opts.CSP))
+	r.Use(middleware.Timeout(time.Duration(cfg.RequestTimeoutSeconds)*time.Second, logger, cfg.Debug))
 
 	r.Mount("/health", health.Router(health.Config{
 		Checks:         opts.HealthChecks,
 		MetricsHandler: tp.MetricsHandler,
+		Logger:         logger,
 	}))
 
 	a := &App{
@@ -252,11 +260,16 @@ func (a *App) Use(mw func(http.Handler) http.Handler) *App {
 //	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 //	defer stop()
 //	if err := application.ListenAndServe(ctx); err != nil { ... }
+//
+// Every exit path runs the same full shutdown — including a failure of
+// either server, or of the gRPC listener after HTTP is already up — so a
+// return from ListenAndServe never leaves the other server still serving
+// or telemetry unflushed.
 func (a *App) ListenAndServe(ctx context.Context) error {
 	addr := fmt.Sprintf("%s:%d", a.Config.HTTPHost, a.Config.HTTPPort)
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
-		return fmt.Errorf("app: listen on %s: %w", addr, err)
+		return errors.Join(fmt.Errorf("app: listen on %s: %w", addr, err), a.shutdown())
 	}
 
 	a.mu.Lock()
@@ -266,19 +279,19 @@ func (a *App) ListenAndServe(ctx context.Context) error {
 	a.server = &http.Server{
 		Handler:           a.Router,
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       time.Duration(a.Config.HTTPReadTimeoutSeconds) * time.Second,
+		IdleTimeout:       time.Duration(a.Config.HTTPIdleTimeoutSeconds) * time.Second,
 	}
 
 	errCh := make(chan error, 2) // HTTP and (if enabled) gRPC each report here
 	go func() { errCh <- httpServeErr(a.server.Serve(ln)) }()
 	a.Logger.Info("listening", "addr", a.Addr())
 
-	var grpcLn net.Listener
 	if a.GRPCServer != nil {
 		grpcAddr := fmt.Sprintf("%s:%d", a.grpcHost, a.grpcPort)
-		grpcLn, err = net.Listen("tcp", grpcAddr)
+		grpcLn, err := net.Listen("tcp", grpcAddr)
 		if err != nil {
-			_ = a.server.Close()
-			return fmt.Errorf("app: grpc listen on %s: %w", grpcAddr, err)
+			return errors.Join(fmt.Errorf("app: grpc listen on %s: %w", grpcAddr, err), a.shutdown())
 		}
 
 		a.mu.Lock()
@@ -291,10 +304,14 @@ func (a *App) ListenAndServe(ctx context.Context) error {
 
 	select {
 	case err := <-errCh:
+		// One server stopped on its own (nil only if something outside
+		// ListenAndServe closed it). Either way, take the other one and
+		// telemetry down with it rather than returning with them running.
+		var serveErr error
 		if err != nil {
-			return fmt.Errorf("app: serve: %w", err)
+			serveErr = fmt.Errorf("app: serve: %w", err)
 		}
-		return nil
+		return errors.Join(serveErr, a.shutdown())
 	case <-ctx.Done():
 		return a.shutdown()
 	}
@@ -311,13 +328,22 @@ func httpServeErr(err error) error {
 	return err
 }
 
+// shutdown stops everything ListenAndServe may have started — HTTP server,
+// gRPC server, telemetry — always attempting every step even when an
+// earlier one fails, and returns the joined errors. Safe to call when
+// neither server got as far as serving.
 func (a *App) shutdown() error {
 	a.Logger.Info("shutting down", "timeout", time.Duration(a.Config.ShutdownTimeoutSeconds)*time.Second)
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Duration(a.Config.ShutdownTimeoutSeconds)*time.Second)
 	defer cancel()
 
-	if err := a.server.Shutdown(shutdownCtx); err != nil {
-		return fmt.Errorf("app: graceful shutdown: %w", err)
+	var errs []error
+	if a.server != nil {
+		if err := a.server.Shutdown(shutdownCtx); err != nil {
+			// Drain timed out: drop the stragglers so the process can exit.
+			_ = a.server.Close()
+			errs = append(errs, fmt.Errorf("app: graceful shutdown: %w", err))
+		}
 	}
 
 	if a.GRPCServer != nil {
@@ -333,8 +359,13 @@ func (a *App) shutdown() error {
 		}
 	}
 
-	if err := a.Telemetry.Shutdown(shutdownCtx); err != nil {
-		return fmt.Errorf("app: telemetry shutdown: %w", err)
+	// Flush telemetry on a fresh deadline: if the drain above used up
+	// shutdownCtx, the spans and metrics describing that slow shutdown are
+	// exactly the ones worth not losing.
+	flushCtx, flushCancel := context.WithTimeout(context.Background(), time.Duration(a.Config.ShutdownTimeoutSeconds)*time.Second)
+	defer flushCancel()
+	if err := a.Telemetry.Shutdown(flushCtx); err != nil {
+		errs = append(errs, fmt.Errorf("app: telemetry shutdown: %w", err))
 	}
-	return nil
+	return errors.Join(errs...)
 }

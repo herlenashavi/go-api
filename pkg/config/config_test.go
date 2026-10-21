@@ -53,6 +53,9 @@ func TestLoad_Defaults(t *testing.T) {
 		"LogLevel":     {cfg.LogLevel, "info"},
 		"PolicyDir":    {cfg.PolicyDir, "./policies"},
 		"DevJWTSecret": {cfg.DevJWTSecret, "dev-secret-change-me"},
+
+		"HTTPReadTimeoutSeconds": {cfg.HTTPReadTimeoutSeconds, 30},
+		"HTTPIdleTimeoutSeconds": {cfg.HTTPIdleTimeoutSeconds, 120},
 	}
 	for name, c := range cases {
 		if c.got != c.want {

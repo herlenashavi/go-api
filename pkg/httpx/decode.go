@@ -42,7 +42,7 @@ import (
 func Decode[In any](r *http.Request) (*In, error) {
 	var in In
 
-	if err := decodeBody(r, &in); err != nil {
+	if err := DecodeJSONBody(r, &in); err != nil {
 		return nil, err
 	}
 	if err := bindTagged(r, &in); err != nil {
@@ -51,7 +51,13 @@ func Decode[In any](r *http.Request) (*In, error) {
 	return &in, nil
 }
 
-func decodeBody(r *http.Request, in any) error {
+// DecodeJSONBody decodes r's JSON body into v with the same error mapping
+// Decode uses: an absent body is not an error, a body over BodyLimit's cap
+// is a 413 problem, and anything else unparseable is a 400. Use it in a
+// hand-written handler that can't go through Decode (e.g. one combining a
+// path param with a generically-typed body, like pkg/crud's update route)
+// so its wire behavior stays identical to a Handle-based route.
+func DecodeJSONBody(r *http.Request, in any) error {
 	if r.Body == nil {
 		return nil
 	}
@@ -71,7 +77,7 @@ func decodeBody(r *http.Request, in any) error {
 }
 
 // bindTagged fills fields tagged `path`, `query`, or `header` from the
-// request, overwriting whatever decodeBody may have set for them — path,
+// request, overwriting whatever DecodeJSONBody may have set for them — path,
 // query, and header values are the source of truth for the fields that
 // declare them.
 func bindTagged(r *http.Request, in any) error {

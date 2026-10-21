@@ -28,6 +28,20 @@ request-body logger, [docs/logging.md](logging.md)), and in
 **not** change log format — that's always JSON, unconditionally, in
 every mode.
 
+### HTTP server timeouts
+
+Three settings bound how long a connection can hold the server, each
+covering a gap the others can't:
+
+| Env var | Default | Bounds |
+|---|---|---|
+| `REQUEST_TIMEOUT_SECONDS` | 30 | Handler run time (the `Timeout` middleware → 503). |
+| `HTTP_READ_TIMEOUT_SECONDS` | 30 | Reading the *whole* request, headers and body. This is what stops a client trickling a body in to pin a connection — a handler blocked in `Body.Read` doesn't observe the request timeout. `0` disables it. |
+| `HTTP_IDLE_TIMEOUT_SECONDS` | 120 | An idle keep-alive connection between requests. `0` falls back to the read timeout. |
+
+Raise `HTTP_READ_TIMEOUT_SECONDS` for a service that legitimately accepts
+large or slow uploads.
+
 ## Extending it for your own service
 
 A real service almost always needs at least one setting `Base` doesn't

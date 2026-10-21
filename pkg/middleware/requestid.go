@@ -20,11 +20,14 @@ const RequestIDHeader = "X-Request-ID"
 
 // RequestID assigns a request ID (reusing an inbound X-Request-ID if the
 // caller/gateway already set one) and both stores it in context (retrieve
-// with reqctx.RequestID) and echoes it on the response.
+// with reqctx.RequestID) and echoes it on the response. An inbound ID that
+// fails reqctx.ValidRequestID (oversized, or containing anything outside
+// [A-Za-z0-9._:-]) is replaced with a fresh one rather than echoed, logged,
+// and forwarded downstream verbatim.
 func RequestID(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id := r.Header.Get(RequestIDHeader)
-		if id == "" {
+		if !reqctx.ValidRequestID(id) {
 			id = uuid.NewString()
 		}
 		w.Header().Set(RequestIDHeader, id)
