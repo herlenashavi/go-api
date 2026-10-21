@@ -52,7 +52,7 @@ mkdocs build --strict  # what CI runs; catches a broken internal link
 
 ## Architecture
 
-**`pkg/app.New` is the composition root.** It wires config, logging, the OTel telemetry pipeline, the default middleware chain (request ID → panic recovery → tracing → RED metrics → access log → timeout → body limit → CORS → security headers), health endpoints, and — if `Options.GRPCEnabled` — a gRPC server, into one `App` with one graceful-shutdown lifecycle. Read `pkg/app/app.go` first; most "how do these packages fit together" questions are answered by what it calls, in what order.
+**`pkg/app.New` is the composition root.** It wires config, logging, the OTel telemetry pipeline, the default middleware chain (request ID → panic recovery → tracing → RED metrics → body limit → access log → CORS → security headers → timeout), health endpoints, and — if `Options.GRPCEnabled` — a gRPC server, into one `App` with one graceful-shutdown lifecycle. Read `pkg/app/app.go` first; most "how do these packages fit together" questions are answered by what it calls, in what order.
 
 **Server kit + opt-in layers, not a monolith.** `config`/`logging`/`telemetry`/`problem`/`httpx`/`middleware`/`health` work standalone and compose via `app.New`. `crud`, `authz`, `dbx`, and `grpcx` are opt-in on top — a service can always drop to a raw chi handler instead of `crud.Resource`, and `app.Options.Verifier`/`Authorizer` are both nil-able. Nothing here is "the only way" to build a route; see the package doc comments, which spell this out explicitly (e.g. `pkg/crud`'s and `pkg/grpcx`'s).
 
