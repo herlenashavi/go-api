@@ -181,20 +181,32 @@ func (s *PGHeroStore) Delete(ctx context.Context, id string) error {
 // see MemoryHeroStore.Retire's doc comment — but heroStore (retire.go)
 // requires it of every backend main.go can construct, PGHeroStore
 // included.
-func (s *PGHeroStore) Retire(ctx context.Context, id uuid.UUID) (Hero, error) {
+//
+// The UPDATE only matches while status is still expected (see
+// heroStore.Retire); when it matches nothing, a follow-up existence check
+// tells a missing hero (404) from one whose status changed (409).
+func (s *PGHeroStore) Retire(ctx context.Context, id uuid.UUID, expected HeroStatus) (Hero, error) {
 	h, err := scanHero(s.pool.QueryRow(ctx,
 		`UPDATE heroes SET status = 'retired', modified_at = now()
-		 WHERE id = $1
+		 WHERE id = $1 AND status = $2
 		 RETURNING `+heroColumns,
-		id.String(),
+		id.String(), string(expected),
 	))
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return Hero{}, problem.NotFound("Hero")
-		}
+	if err == nil {
+		return h, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
 		return Hero{}, fmt.Errorf("retire hero: %w", err)
 	}
-	return h, nil
+
+	var exists bool
+	if err := s.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM heroes WHERE id = $1)`, id.String()).Scan(&exists); err != nil {
+		return Hero{}, fmt.Errorf("retire hero: %w", err)
+	}
+	if !exists {
+		return Hero{}, problem.NotFound("Hero")
+	}
+	return Hero{}, heroStatusChanged()
 }
 
 // filterColumns maps each FilterableFields key (set in main.go's

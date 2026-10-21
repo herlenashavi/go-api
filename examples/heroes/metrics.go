@@ -56,8 +56,8 @@ func (s *instrumentedHeroStore) Create(ctx context.Context, in CreateHero) (Hero
 	return hero, err
 }
 
-func (s *instrumentedHeroStore) Retire(ctx context.Context, id uuid.UUID) (Hero, error) {
-	hero, err := s.heroStore.Retire(ctx, id)
+func (s *instrumentedHeroStore) Retire(ctx context.Context, id uuid.UUID, expected HeroStatus) (Hero, error) {
+	hero, err := s.heroStore.Retire(ctx, id, expected)
 	if err == nil {
 		s.retired.Add(ctx, 1)
 	}

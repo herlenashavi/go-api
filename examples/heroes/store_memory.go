@@ -216,13 +216,17 @@ func (s *MemoryHeroStore) Delete(_ context.Context, id string) error {
 // Retire is a hand-written, non-CRUD operation on the same store — the
 // kind of thing that doesn't fit Store's five methods and is exactly why
 // crud.Resource is opt-in rather than the only way to expose a resource.
-// See retire.go for the route built on top of this.
-func (s *MemoryHeroStore) Retire(_ context.Context, id uuid.UUID) (Hero, error) {
+// See retire.go for the route built on top of this, and heroStore.Retire
+// for why expected exists.
+func (s *MemoryHeroStore) Retire(_ context.Context, id uuid.UUID, expected HeroStatus) (Hero, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	h, ok := s.heroes[id]
 	if !ok {
 		return Hero{}, problem.NotFound("Hero")
+	}
+	if h.Status != expected {
+		return Hero{}, heroStatusChanged()
 	}
 	h.Status = HeroStatusRetired
 	h.ModifiedAt = time.Now().UTC()
