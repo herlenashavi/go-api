@@ -6,6 +6,7 @@ package health
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"sync"
 	"time"
@@ -37,6 +38,10 @@ type Config struct {
 	// MetricsHandler, if set, is mounted at /health/metrics (Prometheus
 	// text exposition format) — pass telemetry.Provider.MetricsHandler.
 	MetricsHandler http.Handler
+	// Logger receives the error behind each failing readiness check (the
+	// HTTP response itself only says which checks failed — see Router).
+	// Defaults to slog.Default().
+	Logger *slog.Logger
 }
 
 // CheckResult is one Check's outcome, as reported by both Router's
@@ -49,21 +54,36 @@ type CheckResult struct {
 }
 
 type readinessResponse struct {
-	Status string        `json:"status"`
-	Checks []CheckResult `json:"checks,omitempty"`
+	Status string           `json:"status"`
+	Checks []readinessCheck `json:"checks,omitempty"`
+}
+
+// readinessCheck is CheckResult minus Error: /health/readiness is
+// unauthenticated, and a dependency's error text routinely names internal
+// hosts, users, and databases (a pgx ping error does), so the endpoint
+// reports only which checks failed and leaves the why to the server log.
+type readinessCheck struct {
+	Name    string `json:"name"`
+	Healthy bool   `json:"healthy"`
 }
 
 // Router returns a chi.Router exposing:
 //
 //	GET /health/liveness  — always 200 once the process is serving traffic.
 //	GET /health/readiness — 200 iff every Check passes, 503 otherwise, with
-//	                         a body detailing which check(s) failed.
+//	                         a body naming which check(s) failed (each
+//	                         failure's error is logged, not returned).
 //	GET /health/metrics   — Prometheus scrape endpoint, if MetricsHandler
 //	                         is configured.
 func Router(cfg Config) chi.Router {
 	timeout := cfg.PerCheckTimeout
 	if timeout <= 0 {
 		timeout = 2 * time.Second
+	}
+
+	logger := cfg.Logger
+	if logger == nil {
+		logger = slog.Default()
 	}
 
 	r := chi.NewRouter()
@@ -75,11 +95,19 @@ func Router(cfg Config) chi.Router {
 	r.Get("/readiness", func(w http.ResponseWriter, r *http.Request) {
 		healthy, results := Run(r.Context(), cfg.Checks, timeout)
 
+		checks := make([]readinessCheck, len(results))
+		for i, res := range results {
+			checks[i] = readinessCheck{Name: res.Name, Healthy: res.Healthy}
+			if !res.Healthy {
+				logger.WarnContext(r.Context(), "readiness check failed", "check", res.Name, "error", res.Error)
+			}
+		}
+
 		status, overall := http.StatusOK, "healthy"
 		if !healthy {
 			status, overall = http.StatusServiceUnavailable, "unhealthy"
 		}
-		writeJSON(w, status, readinessResponse{Status: overall, Checks: results})
+		writeJSON(w, status, readinessResponse{Status: overall, Checks: checks})
 	})
 
 	if cfg.MetricsHandler != nil {

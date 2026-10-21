@@ -184,6 +184,7 @@ func New(ctx context.Context, opts Options) (*App, error) {
 	r.Mount("/health", health.Router(health.Config{
 		Checks:         opts.HealthChecks,
 		MetricsHandler: tp.MetricsHandler,
+		Logger:         logger,
 	}))
 
 	a := &App{

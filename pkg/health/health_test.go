@@ -1,10 +1,14 @@
 package health_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -38,6 +42,37 @@ func TestRouter_ReadinessUnhealthyDependency(t *testing.T) {
 
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want 503, body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestRouter_ReadinessHidesCheckErrors: /health/readiness needs no
+// credentials, so a failing check's error text — which for a database
+// ping names hosts, users, and databases — must go to the log, not the
+// response body.
+func TestRouter_ReadinessHidesCheckErrors(t *testing.T) {
+	const secret = "failed to connect to `user=app database=heroes host=10.0.0.5`"
+	var logBuf bytes.Buffer
+	r := health.Router(health.Config{
+		Logger: slog.New(slog.NewJSONHandler(&logBuf, nil)),
+		Checks: []health.Check{
+			{Name: "database", Checker: func(ctx context.Context) error { return errors.New(secret) }},
+		},
+	})
+
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readiness", nil))
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", rec.Code)
+	}
+	if strings.Contains(rec.Body.String(), "10.0.0.5") || strings.Contains(rec.Body.String(), "user=app") {
+		t.Fatalf("readiness body leaks the check error: %s", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"name":"database"`) {
+		t.Fatalf("readiness body should still name the failing check: %s", rec.Body.String())
+	}
+	if !strings.Contains(logBuf.String(), "database=heroes") {
+		t.Fatalf("the check error should be logged server-side; log = %s", logBuf.String())
 	}
 }
 

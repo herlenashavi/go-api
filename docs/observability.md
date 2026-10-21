@@ -62,7 +62,10 @@ exists today.
 
 **`pkg/health`** provides liveness/readiness with per-check timeouts
 that can't be hung by a misbehaving `Checker`, plus the Prometheus scrape
-endpoint.
+endpoint. `/health/readiness` is unauthenticated, so its body names which
+checks failed but never *why*: a failing check's error (which for a
+database ping names hosts, users, and databases) is logged at warn level
+as `readiness check failed`, not returned to the prober.
 
 ## Known gaps
 
