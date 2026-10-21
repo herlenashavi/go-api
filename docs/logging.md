@@ -19,6 +19,12 @@ logger.Info("hero created", "heroId", id)
 // {"time":"...","level":"INFO","msg":"hero created","heroId":"...","service":"heroes","env":"prod"}
 ```
 
+`service`, `env`, and the context-derived correlation fields (`request_id`,
+`trace_id`, `actor`, ...) always sit at the top level of the line, even on
+a logger with an open group — `logger.WithGroup("db").Info("query", "q", q)`
+nests only `q` under `db` — so a query filtering on `request_id` finds
+every line.
+
 Earlier versions of this framework switched to a human-readable text
 handler whenever a service ran with `Debug: true` (which `examples/heroes`
 and `examples/villains` both default to). That's gone: `pkg/app` always
@@ -30,7 +36,8 @@ format that only exists in dev.
 
 Two independent mechanisms, both applied to **the log message and every
 attribute value** — including inside nested `slog.Group`s, resolved
-`LogValuer`s, and `map[string]any`/`[]any` values (the shape a decoded
+`LogValuer`s, `error` values (`"error", err` is logged as its redacted
+`Error()` text), and `map[string]any`/`[]any` values (the shape a decoded
 JSON body takes):
 
 1. **Key-based.** A field whose name matches a known-sensitive name —
