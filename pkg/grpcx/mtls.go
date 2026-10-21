@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"strings"
 	"sync/atomic"
 	"time"
 
@@ -250,7 +249,7 @@ func (s *MTLSStore) clientTLSConfig(serverName string) *tls.Config {
 // certificate proves identity, never authorization.
 func peerIdentityName(cert *x509.Certificate) string {
 	for _, uri := range cert.URIs {
-		if strings.HasPrefix(uri.Scheme, "spiffe") {
+		if uri.Scheme == "spiffe" {
 			return uri.String()
 		}
 	}

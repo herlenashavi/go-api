@@ -76,12 +76,12 @@ Each of these is a real, known gap, not an oversight:
   all — request/response shapes are real Go types, but nothing walks them
   into a spec yet. That's the prerequisite for a generated client, not
   just the client itself.
-- **gRPC streaming.** `pkg/grpcx`'s interceptor chain (recovery,
-  request-ID, access logging, mTLS peer identity, bearer-token auth) is
-  entirely unary (`grpc.UnaryServerInterceptor`/`UnaryClientInterceptor`).
-  A streaming RPC needs its own interceptor wired via
-  `grpc.StreamInterceptor` — not provided, and not exercised by either
-  example service.
+- **gRPC client-side streaming.** `grpcx.NewServer` runs streaming RPCs
+  through the same interceptor chain as unary ones (recovery, request-ID,
+  access logging, mTLS peer identity, bearer-token auth). The client side
+  is still unary-only: `grpcx.Dial` forwards the request ID and bearer
+  token on unary calls, not on streams. Neither example service exercises
+  streaming.
 - **mTLS CA rotation and issuer integration.** mTLS itself is supported
   (`grpcx.TLSConfig`/`LoadMTLS`, `authn.ServiceIdentity`,
   `Authorizer.CheckService` — see `docs/grpc.md`), including hot-reload

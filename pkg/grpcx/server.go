@@ -16,7 +16,9 @@ import (
 // (innermost, only if deps.Verifier is set) — the same ordering
 // rationale as pkg/app's HTTP middleware chain. OTel tracing/metrics are
 // wired via a stats.Handler (otelgrpc), not an interceptor, per
-// otelgrpc's current API.
+// otelgrpc's current API. The same chain is installed for streaming RPCs
+// (see stream.go), so a streaming method is never served without
+// authentication or panic recovery.
 //
 // When deps.MTLS is set (via LoadMTLS), the server's transport itself
 // becomes TLS, requiring or accepting a client certificate per
@@ -30,6 +32,8 @@ import (
 // lets grpcurl and similar tools call your service without a copy of its
 // .proto file, which is exactly the kind of discoverability you want
 // locally and don't want to assume is safe to expose in production.
+// Reflection is itself a streaming RPC, so when deps.Verifier is set it
+// requires a bearer token too (grpcurl -H "authorization: Bearer ...").
 //
 // Register your service implementations on the returned server, plus
 // RegisterHealth if you want the same health.Checker-driven readiness
@@ -43,18 +47,26 @@ func NewServer(deps Dependencies, extraOpts ...grpc.ServerOption) *grpc.Server {
 		logger = slog.Default()
 	}
 
-	interceptors := []grpc.UnaryServerInterceptor{
-		recoveryInterceptor(logger, deps.Debug),
-		requestIDInterceptor(),
-		accessLogInterceptor(logger),
-	}
 	var serviceRoles map[string][]string
 	if deps.MTLS != nil {
 		serviceRoles = deps.MTLS.cfg.ServiceRoles
 	}
-	interceptors = append(interceptors, peerIdentityInterceptor(serviceRoles))
+
+	interceptors := []grpc.UnaryServerInterceptor{
+		recoveryInterceptor(logger, deps.Debug),
+		requestIDInterceptor(),
+		accessLogInterceptor(logger),
+		peerIdentityInterceptor(serviceRoles),
+	}
+	streamInterceptors := []grpc.StreamServerInterceptor{
+		streamRecoveryInterceptor(logger, deps.Debug),
+		streamRequestIDInterceptor(),
+		streamAccessLogInterceptor(logger),
+		streamPeerIdentityInterceptor(serviceRoles),
+	}
 	if deps.Verifier != nil {
 		interceptors = append(interceptors, authnInterceptor(deps.Verifier))
+		streamInterceptors = append(streamInterceptors, streamAuthnInterceptor(deps.Verifier))
 	}
 
 	statsOpts := []otelgrpc.Option{}
@@ -67,6 +79,7 @@ func NewServer(deps Dependencies, extraOpts ...grpc.ServerOption) *grpc.Server {
 
 	opts := []grpc.ServerOption{
 		grpc.ChainUnaryInterceptor(interceptors...),
+		grpc.ChainStreamInterceptor(streamInterceptors...),
 		grpc.StatsHandler(otelgrpc.NewServerHandler(statsOpts...)),
 	}
 	if deps.MTLS != nil {

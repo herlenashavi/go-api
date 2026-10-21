@@ -2,6 +2,8 @@ package grpcx_test
 
 import (
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 
 	"google.golang.org/grpc/codes"
@@ -47,6 +49,20 @@ func TestStatus_PlainErrorBecomesInternal(t *testing.T) {
 	got := grpcx.Status(errors.New("unexpected"))
 	if code := grpcstatus.Code(got); code != codes.Internal {
 		t.Fatalf("code = %v, want Internal", code)
+	}
+}
+
+// TestStatus_PlainErrorTextNotSentToCaller guards against a store or driver
+// error (SQL, hostnames, row data) reaching the gRPC caller verbatim.
+func TestStatus_PlainErrorTextNotSentToCaller(t *testing.T) {
+	secret := "pg: connect user=app host=10.0.0.5 password=hunter2"
+	got := grpcx.Status(fmt.Errorf("get villain: %w", errors.New(secret)))
+	st, _ := grpcstatus.FromError(got)
+	if strings.Contains(st.Message(), "hunter2") || strings.Contains(st.Message(), "10.0.0.5") {
+		t.Fatalf("status message leaks the internal error: %q", st.Message())
+	}
+	if st.Message() == "" {
+		t.Fatal("expected a generic, non-empty message")
 	}
 }
 
