@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"testing"
 	"time"
@@ -125,6 +126,52 @@ func TestVillainServer_ListFiltersByStatus(t *testing.T) {
 	}
 	if active.Total != 0 {
 		t.Fatalf("total = %d, want 0 (none captured yet)", active.Total)
+	}
+}
+
+// TestVillainServer_ListBoundsPaging covers ListVillainsRequest's
+// client-supplied limit/offset: an oversized limit is capped at
+// maxPageSize, and a negative offset is treated as 0 instead of slicing
+// out of range.
+func TestVillainServer_ListBoundsPaging(t *testing.T) {
+	s := newTestServer(t)
+	for i := 0; i < maxPageSize+5; i++ {
+		if _, err := s.CreateVillain(ctxAs("admin"), &villainsv1.CreateVillainRequest{Name: fmt.Sprintf("v%03d", i)}); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+	}
+
+	huge, err := s.ListVillains(ctxAs("viewer"), &villainsv1.ListVillainsRequest{Limit: 1 << 30})
+	if err != nil {
+		t.Fatalf("list with huge limit: %v", err)
+	}
+	if len(huge.Villains) != maxPageSize {
+		t.Fatalf("len = %d, want %d (capped)", len(huge.Villains), maxPageSize)
+	}
+	if huge.Total != maxPageSize+5 {
+		t.Fatalf("total = %d, want %d", huge.Total, maxPageSize+5)
+	}
+
+	negative, err := s.ListVillains(ctxAs("viewer"), &villainsv1.ListVillainsRequest{Limit: 3, Offset: -5})
+	if err != nil {
+		t.Fatalf("list with negative offset: %v", err)
+	}
+	if len(negative.Villains) != 3 || negative.Villains[0].Name != "v000" {
+		t.Fatalf("negative offset: got %d villains starting %q, want 3 starting v000", len(negative.Villains), negative.Villains[0].GetName())
+	}
+}
+
+func TestNormalizePage(t *testing.T) {
+	cases := []struct{ limit, offset, wantLimit, wantOffset int }{
+		{0, 0, defaultPageSize, 0},
+		{-1, -1, defaultPageSize, 0},
+		{50, 10, 50, 10},
+		{maxPageSize + 1, 0, maxPageSize, 0},
+	}
+	for _, c := range cases {
+		if l, o := normalizePage(c.limit, c.offset); l != c.wantLimit || o != c.wantOffset {
+			t.Errorf("normalizePage(%d, %d) = (%d, %d), want (%d, %d)", c.limit, c.offset, l, o, c.wantLimit, c.wantOffset)
+		}
 	}
 }
 
