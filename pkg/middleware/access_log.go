@@ -97,27 +97,33 @@ func routePattern(r *http.Request) string {
 	return r.URL.Path
 }
 
-// maxLoggedBodyBytes bounds how much of a buffered body is actually
-// unmarshalled and logged. It does NOT bound how much is read off the wire
-// for restoration below — truncating that would corrupt the body the real
-// handler receives. Pair with BodyLimit so request bodies are bounded
-// before they ever reach here.
+// maxLoggedBodyBytes bounds both how much of a body is logged and how much
+// logRequestBody buffers to decide: it reads at most maxLoggedBodyBytes+1
+// bytes, so a huge body costs this middleware a bounded amount of memory
+// regardless of where it sits relative to BodyLimit in the chain.
 const maxLoggedBodyBytes = 1 << 20 // 1 MiB
 
-// logRequestBody reads and logs the body, then replaces r.Body with a fresh
-// reader over the same bytes so the handler further down the chain can
-// still read the complete, untruncated body from the start. Reading r.Body
-// here without restoring it would silently hand the handler an empty body
-// on every logged request — easy to miss since it only breaks under the
-// exact log level this middleware is gated on.
+// logRequestBody logs the body, then replaces r.Body with a reader that
+// yields the bytes already consumed followed by whatever is still unread,
+// so the handler further down the chain receives the complete, untruncated
+// body from the start. Reading r.Body here without restoring it would
+// silently hand the handler an empty body on every logged request — easy
+// to miss since it only breaks under the exact log level this middleware
+// is gated on.
+//
+// Only a bounded prefix is ever buffered: a body longer than
+// maxLoggedBodyBytes isn't logged, and its remainder is streamed straight
+// through to the handler rather than read into memory here.
 func logRequestBody(r *http.Request, logger *slog.Logger) {
 	if r.Body == nil || !strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
 		return
 	}
 
-	data, err := io.ReadAll(r.Body)
-	_ = r.Body.Close()
-	r.Body = io.NopCloser(bytes.NewReader(data))
+	data, err := io.ReadAll(io.LimitReader(r.Body, maxLoggedBodyBytes+1))
+	r.Body = struct {
+		io.Reader
+		io.Closer
+	}{io.MultiReader(bytes.NewReader(data), r.Body), r.Body}
 	if err != nil || len(data) > maxLoggedBodyBytes {
 		return // restored above either way; just don't log it
 	}
