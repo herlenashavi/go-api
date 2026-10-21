@@ -89,29 +89,18 @@ func run(ctx context.Context) error {
 	authorizer := authz.New(policyStore, roles, nil)
 	authorizer.Debug = cfg.Debug
 
-	// --- Storage: in-memory with zero setup by default; set DATABASE_URL
-	// to run against real Postgres instead, via VillainPGStore
-	// (store_pg.go) — same opt-in pattern as examples/heroes. Schema
-	// comes from examples/villains/migrations, applied separately — see
-	// examples/villains/migrate — not by this process at boot. ---
-	var store villainStore
-	healthChecks := []health.Check{
-		{Name: "villain-store", Checker: func(context.Context) error { return nil }},
-	}
-
+	// The readiness check closes over pool because the pool is built
+	// after app.New (below), once the telemetry providers it reports into
+	// exist — see examples/heroes/main.go's identical setup. pool stays
+	// nil for the in-memory store, which is always ready.
 	var pool *dbx.Pool
-	if cfg.DatabaseURL != "" {
-		pool, err = dbx.NewPool(ctx, dbx.Config{DSN: cfg.DatabaseURL})
-		if err != nil {
-			return fmt.Errorf("connect to database: %w", err)
-		}
-		defer pool.Close()
-		store = NewVillainPGStore(pool)
-		healthChecks = []health.Check{
-			{Name: "villain-store", Checker: pool.HealthCheck},
-		}
-	} else {
-		store = NewVillainStore()
+	healthChecks := []health.Check{
+		{Name: "villain-store", Checker: func(ctx context.Context) error {
+			if pool == nil {
+				return nil
+			}
+			return pool.HealthCheck(ctx)
+		}},
 	}
 
 	mtls, err := loadMTLS(cfg.MTLS)
@@ -133,6 +122,29 @@ func run(ctx context.Context) error {
 	if mtls != nil {
 		go mtls.Watch(ctx, 30*time.Second, application.Logger)
 		application.Logger.Info("mTLS enabled for the gRPC server")
+	}
+
+	// --- Storage: in-memory with zero setup by default; set DATABASE_URL
+	// to run against real Postgres instead, via VillainPGStore
+	// (store_pg.go) — same opt-in pattern as examples/heroes, including
+	// passing the app's Tracer/Meter so queries land in the same telemetry
+	// pipeline as the RPCs that issue them. Schema comes from
+	// examples/villains/migrations, applied separately — see
+	// examples/villains/migrate — not by this process at boot. ---
+	var store villainStore
+	if cfg.DatabaseURL != "" {
+		pool, err = dbx.NewPool(ctx, dbx.Config{
+			DSN:    cfg.DatabaseURL,
+			Tracer: application.Telemetry.Tracer,
+			Meter:  application.Telemetry.Meter,
+		})
+		if err != nil {
+			return fmt.Errorf("connect to database: %w", err)
+		}
+		defer pool.Close()
+		store = NewVillainPGStore(pool)
+	} else {
+		store = NewVillainStore()
 	}
 
 	villainsv1.RegisterVillainServiceServer(application.GRPCServer, NewVillainServer(store, authorizer))

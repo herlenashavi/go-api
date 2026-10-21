@@ -60,23 +60,35 @@ func run(ctx context.Context) error {
 	if cfg.DatabaseURL == "" {
 		return fmt.Errorf("DATABASE_URL is required")
 	}
-	pool, err := dbx.NewPool(ctx, dbx.Config{DSN: cfg.DatabaseURL})
-	if err != nil {
-		return fmt.Errorf("connect to database: %w", err)
-	}
-	defer pool.Close()
+	// The pool is built after app.New (below) so it can report into the
+	// same telemetry pipeline; the readiness check closes over it, and
+	// readiness isn't served until ListenAndServe, by which point it's set.
+	var pool *dbx.Pool
 {{end}}
 	application, err := app.New(ctx, app.Options{
 		Config: cfg,
 {{if ne .Authn "none"}}		Verifier: verifier,
 {{end}}{{if .Authz}}		Authorizer: authorizer,
 {{end}}{{if .DB}}		HealthChecks: []health.Check{
-			{Name: "database", Checker: pool.HealthCheck},
+			{Name: "database", Checker: func(ctx context.Context) error { return pool.HealthCheck(ctx) }},
 		},
 {{end}}	})
 	if err != nil {
 		return err
 	}
+{{if .DB}}
+	// Passing the app's Tracer/Meter puts every query in the same trace
+	// and metrics pipeline as the HTTP request that issued it.
+	pool, err = dbx.NewPool(ctx, dbx.Config{
+		DSN:    cfg.DatabaseURL,
+		Tracer: application.Telemetry.Tracer,
+		Meter:  application.Telemetry.Meter,
+	})
+	if err != nil {
+		return fmt.Errorf("connect to database: %w", err)
+	}
+	defer pool.Close()
+{{end}}
 {{if .Authz}}
 	// Poll for policy changes so editing policies/*.cedar takes effect
 	// without a restart. See docs/authorization.md.
