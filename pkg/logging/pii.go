@@ -109,9 +109,13 @@ func redactValue(v slog.Value) slog.Value {
 
 // redactAny handles the slog.KindAny case: a value logged via slog.Any,
 // most commonly the result of decoding a JSON body into map[string]any
-// (see middleware.AccessLog's request-body logging) or a []any. Anything
-// else (a custom struct, say) passes through unchanged — see
-// RegisterPIIPattern's doc comment on this limitation.
+// (see middleware.AccessLog's request-body logging) or a []any. An error
+// (`"error", err` — the single most common attribute) is reduced to its
+// redacted Error() text: slog's JSON handler would otherwise encode
+// err.Error() itself, after this handler has already run, so its message
+// would reach the log unscanned. Anything else (a custom struct, say)
+// passes through unchanged — see RegisterPIIPattern's doc comment on this
+// limitation.
 func redactAny(v any) any {
 	switch val := v.(type) {
 	case map[string]any:
@@ -136,6 +140,8 @@ func redactAny(v any) any {
 		return out
 	case string:
 		return redactString(val)
+	case error:
+		return redactString(val.Error())
 	case fmt.Stringer:
 		return redactString(val.String())
 	default:

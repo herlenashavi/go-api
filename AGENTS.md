@@ -52,7 +52,7 @@ mkdocs build --strict  # what CI runs; catches a broken internal link
 
 ## Architecture
 
-**`pkg/app.New` is the composition root.** It wires config, logging, the OTel telemetry pipeline, the default middleware chain (request ID → panic recovery → tracing → RED metrics → access log → timeout → body limit → CORS → security headers), health endpoints, and — if `Options.GRPCEnabled` — a gRPC server, into one `App` with one graceful-shutdown lifecycle. Read `pkg/app/app.go` first; most "how do these packages fit together" questions are answered by what it calls, in what order.
+**`pkg/app.New` is the composition root.** It wires config, logging, the OTel telemetry pipeline, the default middleware chain (request ID → panic recovery → tracing → RED metrics → body limit → access log → CORS → security headers → timeout), health endpoints, and — if `Options.GRPCEnabled` — a gRPC server, into one `App` with one graceful-shutdown lifecycle. Read `pkg/app/app.go` first; most "how do these packages fit together" questions are answered by what it calls, in what order.
 
 **Server kit + opt-in layers, not a monolith.** `config`/`logging`/`telemetry`/`problem`/`httpx`/`middleware`/`health` work standalone and compose via `app.New`. `crud`, `authz`, `dbx`, and `grpcx` are opt-in on top — a service can always drop to a raw chi handler instead of `crud.Resource`, and `app.Options.Verifier`/`Authorizer` are both nil-able. Nothing here is "the only way" to build a route; see the package doc comments, which spell this out explicitly (e.g. `pkg/crud`'s and `pkg/grpcx`'s).
 
@@ -68,4 +68,4 @@ mkdocs build --strict  # what CI runs; catches a broken internal link
 
 **`cmd/go-api` (`go-api new`) is a code generator, not a runtime dependency.** It renders Go source from templates in `cmd/go-api/internal/scaffold/templates/` into a *new, separate* module requiring `github.com/herlenashavi/go-api` — it never imports or is imported by anything under `pkg/`. See `docs/scaffolding.md` for what it generates and what's still a roadmap item.
 
-**Known deliberate gaps** (not oversights — see `docs/roadmap.md` for the full list and reasoning): no transactional outbox/idempotency keys/ETags/response caching, no generated OpenAPI client, no gRPC streaming, and `go-api new` doesn't yet wire gRPC/mTLS/Tilt manifests or add resources to an *existing* generated service.
+**Known deliberate gaps** (not oversights — see `docs/roadmap.md` for the full list and reasoning): no transactional outbox/idempotency keys/ETags/response caching, no generated OpenAPI client, no client-side gRPC streaming (server streams are intercepted; `grpcx.Dial` forwarding is unary-only), and `go-api new` doesn't yet wire gRPC/mTLS/Tilt manifests or add resources to an *existing* generated service.

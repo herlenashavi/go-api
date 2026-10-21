@@ -33,7 +33,7 @@ func recoveryInterceptor(logger *slog.Logger, debugMode bool) grpc.UnaryServerIn
 				panicErr := fmt.Errorf("panic: %v", rec)
 				logger.ErrorContext(ctx, "unhandled panic in gRPC handler",
 					"method", info.FullMethod, "error", panicErr, "stack", string(debug.Stack()))
-				msg := "internal error"
+				msg := internalErrorMessage
 				if debugMode {
 					msg = panicErr.Error()
 				}
@@ -64,8 +64,8 @@ func requestIDFromMetadata(ctx context.Context) string {
 		return ""
 	}
 	values := md.Get(requestIDMetadataKey)
-	if len(values) == 0 {
-		return ""
+	if len(values) == 0 || !reqctx.ValidRequestID(values[0]) {
+		return "" // caller mints a fresh ID; see reqctx.ValidRequestID
 	}
 	return values[0]
 }
@@ -116,24 +116,36 @@ const healthServiceMethodPrefix = "/grpc.health.v1.Health/"
 // forwarding — see authn.WithRawToken) into context.
 func authnInterceptor(verifier authn.Verifier) grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
-		if strings.HasPrefix(info.FullMethod, healthServiceMethodPrefix) {
-			return handler(ctx, req)
-		}
-
-		token, err := bearerTokenFromMetadata(ctx)
+		ctx, err := authenticate(ctx, verifier, info.FullMethod)
 		if err != nil {
-			return nil, status.Error(codes.Unauthenticated, err.Error())
+			return nil, err
 		}
-
-		principal, err := verifier.Verify(ctx, token)
-		if err != nil {
-			return nil, status.Error(codes.Unauthenticated, "the provided credentials are invalid or expired")
-		}
-
-		ctx = authn.WithPrincipal(ctx, principal)
-		ctx = authn.WithRawToken(ctx, token)
 		return handler(ctx, req)
 	}
+}
+
+// authenticate is the shared core of authnInterceptor and
+// streamAuthnInterceptor: health-service methods pass through untouched;
+// anything else must carry a verifiable bearer token, and gets the
+// resulting Principal and raw token added to ctx.
+func authenticate(ctx context.Context, verifier authn.Verifier, fullMethod string) (context.Context, error) {
+	if strings.HasPrefix(fullMethod, healthServiceMethodPrefix) {
+		return ctx, nil
+	}
+
+	token, err := bearerTokenFromMetadata(ctx)
+	if err != nil {
+		return nil, status.Error(codes.Unauthenticated, err.Error())
+	}
+
+	principal, err := verifier.Verify(ctx, token)
+	if err != nil {
+		return nil, status.Error(codes.Unauthenticated, "the provided credentials are invalid or expired")
+	}
+
+	ctx = authn.WithPrincipal(ctx, principal)
+	ctx = authn.WithRawToken(ctx, token)
+	return ctx, nil
 }
 
 func bearerTokenFromMetadata(ctx context.Context) (string, error) {
@@ -145,11 +157,13 @@ func bearerTokenFromMetadata(ctx context.Context) (string, error) {
 	if len(values) == 0 {
 		return "", fmt.Errorf("a bearer token is required in the %q metadata key", authorizationMetadataKey)
 	}
+	// The auth-scheme is case-insensitive (RFC 7235 §2.1), so "bearer" and
+	// "BEARER" are as valid as "Bearer".
 	const prefix = "Bearer "
-	if !strings.HasPrefix(values[0], prefix) {
+	if len(values[0]) < len(prefix) || !strings.EqualFold(values[0][:len(prefix)], prefix) {
 		return "", fmt.Errorf("the %q metadata value must be in the form %q", authorizationMetadataKey, prefix+"<token>")
 	}
-	token := strings.TrimSpace(strings.TrimPrefix(values[0], prefix))
+	token := strings.TrimSpace(values[0][len(prefix):])
 	if token == "" {
 		return "", fmt.Errorf("the %q metadata value must be in the form %q", authorizationMetadataKey, prefix+"<token>")
 	}

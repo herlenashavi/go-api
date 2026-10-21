@@ -6,6 +6,9 @@ import (
 	"github.com/google/uuid"
 
 	villainsv1 "github.com/herlenashavi/go-api/examples/villains/gen/villains/v1"
+	"github.com/herlenashavi/go-api/pkg/authn"
+	"github.com/herlenashavi/go-api/pkg/authz"
+	"github.com/herlenashavi/go-api/pkg/problem"
 )
 
 type nemesisInput struct {
@@ -44,8 +47,26 @@ type nemesisOutput struct {
 // Villain in the response. A villain ID that no longer resolves (the
 // villains service doesn't have it, or is unreachable) *is* an error,
 // surfaced via the grpcx.Problem mapping VillainsClient already applies.
-func nemesisHandler(store heroStore, villains *VillainsClient) func(ctx context.Context, in *nemesisInput) (*nemesisOutput, error) {
+//
+// The response carries hero data, so the caller needs "hero:read" on this
+// specific hero — the same check crud.Resource's GET /{id} applies. A
+// hand-written route sitting next to the generated ones doesn't inherit
+// their authorization; it has to ask for it itself. authorizer may be nil
+// only for a service with no authorization at all (as in this file's
+// tests, which exercise the gRPC wiring, not policy).
+func nemesisHandler(store heroStore, villains *VillainsClient, authorizer *authz.Authorizer) func(ctx context.Context, in *nemesisInput) (*nemesisOutput, error) {
 	return func(ctx context.Context, in *nemesisInput) (*nemesisOutput, error) {
+		if authorizer != nil {
+			principal, ok := authn.FromContext(ctx)
+			if !ok || principal == nil {
+				return nil, problem.Unauthorized("")
+			}
+			resource := authz.ResourceRef{Type: "Hero", ID: in.ID.String()}
+			if err := authorizer.Authorize(ctx, principal, "hero:read", resource, nil); err != nil {
+				return nil, err
+			}
+		}
+
 		hero, err := store.Get(ctx, in.ID.String())
 		if err != nil {
 			return nil, err

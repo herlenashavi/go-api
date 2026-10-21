@@ -71,6 +71,73 @@ func TestNew_FieldersEnrichEveryRecord(t *testing.T) {
 	}
 }
 
+// TestNew_CorrelationAttrsStayAtRootUnderWithGroup guards the attrs every
+// log query filters on: a logger with an open group must still put
+// service/env and fielder attrs at the top level, nesting only the
+// caller's own attrs under the group.
+func TestNew_CorrelationAttrsStayAtRootUnderWithGroup(t *testing.T) {
+	var buf bytes.Buffer
+	fielder := func(context.Context) []slog.Attr {
+		return []slog.Attr{slog.String("request_id", "req-1")}
+	}
+	logger := logging.New(logging.Config{ServiceName: "svc", Env: "test", Output: &buf}, fielder)
+
+	logger.WithGroup("db").InfoContext(context.Background(), "query", "q", "select 1")
+
+	line := decodeLines(t, &buf)[0]
+	if line["request_id"] != "req-1" || line["service"] != "svc" || line["env"] != "test" {
+		t.Fatalf("correlation attrs not at root: %+v", line)
+	}
+	db, ok := line["db"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected a db group, got %+v", line)
+	}
+	if db["q"] != "select 1" {
+		t.Fatalf("db.q = %v, want the caller's attr nested under the group", db["q"])
+	}
+	for _, k := range []string{"request_id", "service", "env"} {
+		if _, nested := db[k]; nested {
+			t.Fatalf("%s leaked into the db group: %+v", k, db)
+		}
+	}
+}
+
+// TestNew_WithAndWithGroupNestInCallOrder checks attrs bound by With land
+// at the nesting level that was open when With was called.
+func TestNew_WithAndWithGroupNestInCallOrder(t *testing.T) {
+	var buf bytes.Buffer
+	logger := logging.New(logging.Config{ServiceName: "svc", Output: &buf})
+
+	logger.With("a", "1").WithGroup("g").With("b", "2").WithGroup("h").Info("msg", "c", "3")
+
+	line := decodeLines(t, &buf)[0]
+	if line["a"] != "1" || line["service"] != "svc" {
+		t.Fatalf("root attrs wrong: %+v", line)
+	}
+	g, ok := line["g"].(map[string]any)
+	if !ok || g["b"] != "2" {
+		t.Fatalf("g = %+v, want b=2", line["g"])
+	}
+	h, ok := g["h"].(map[string]any)
+	if !ok || h["c"] != "3" {
+		t.Fatalf("g.h = %+v, want c=3", g["h"])
+	}
+}
+
+// TestNew_EmptyGroupIsOmitted matches slog's own handlers: a group with
+// nothing in it doesn't produce an empty object.
+func TestNew_EmptyGroupIsOmitted(t *testing.T) {
+	var buf bytes.Buffer
+	logger := logging.New(logging.Config{Output: &buf})
+
+	logger.WithGroup("empty").Info("msg")
+
+	line := decodeLines(t, &buf)[0]
+	if _, ok := line["empty"]; ok {
+		t.Fatalf("empty group should be omitted: %+v", line)
+	}
+}
+
 func TestParseLevel_RespectsConfiguredLevel(t *testing.T) {
 	var buf bytes.Buffer
 	logger := logging.New(logging.Config{Level: "warn", Output: &buf})

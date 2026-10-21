@@ -18,11 +18,13 @@ import (
 //
 // An error that's already a gRPC status error (created via status.Error)
 // passes through unchanged. Anything else that isn't a *problem.Problem
-// becomes codes.Internal with its Error() text — so wrap internal errors
-// via problem.Internal(err, debug) before returning them from a handler,
-// the same discipline pkg/httpx and pkg/crud already follow; Status does
-// not re-apply debug gating itself, since a *problem.Problem's Detail
-// already reflects whatever debug decision was made when it was built.
+// becomes codes.Internal with a generic message — never its Error() text,
+// which for a store or driver error can carry SQL, hostnames, or row data
+// the caller has no business seeing. That mirrors problem.Internal(err,
+// false) on the HTTP side. To surface detail in debug mode, wrap the error
+// via problem.Internal(err, debug) before returning it; Status does not
+// re-apply debug gating to a *problem.Problem, since its Detail already
+// reflects whatever debug decision was made when it was built.
 func Status(err error) error {
 	if err == nil {
 		return nil
@@ -36,8 +38,12 @@ func Status(err error) error {
 		return status.Error(httpStatusToCode(p.Status), p.Error())
 	}
 
-	return status.Error(codes.Internal, err.Error())
+	return status.Error(codes.Internal, internalErrorMessage)
 }
+
+// internalErrorMessage is what callers see for an unexpected error. It
+// matches recoveryInterceptor's non-debug panic message.
+const internalErrorMessage = "internal error"
 
 // Problem is Status's inverse: it maps an error returned by a gRPC call —
 // typically one a downstream go-api service produced via Status — back

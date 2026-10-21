@@ -2,7 +2,6 @@ package crud
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"strings"
 
@@ -213,11 +212,9 @@ func updateHandler[T, CreateIn, UpdateIn any](cfg Config[T, CreateIn, UpdateIn],
 		}
 
 		var in UpdateIn
-		if r.Body != nil {
-			if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-				problem.Write(w, r, problem.BadRequest("The request body is not valid JSON: "+err.Error()))
-				return
-			}
+		if err := httpx.DecodeJSONBody(r, &in); err != nil {
+			problem.Write(w, r, problem.From(err, debug))
+			return
 		}
 		if err := httpx.Validate(&in); err != nil {
 			problem.Write(w, r, problem.From(err, debug))

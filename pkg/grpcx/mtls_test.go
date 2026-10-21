@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 
 	"github.com/herlenashavi/go-api/pkg/authn"
@@ -174,6 +175,68 @@ func TestMTLS_RequireClientCert_RejectsPlaintextClient(t *testing.T) {
 	defer cancel()
 	if _, err := healthpb.NewHealthClient(conn).Check(ctx, &healthpb.HealthCheckRequest{}); err == nil {
 		t.Fatal("expected an error connecting with no TLS to an mTLS-required server")
+	}
+}
+
+// TestMTLS_RequireClientCert_GatesTLSClientWithoutCert isolates exactly what
+// RequireClientCert controls: a client that speaks TLS and trusts the
+// server's CA, but presents no certificate of its own. Rejected when
+// RequireClientCert is set; accepted (with no ServiceIdentity) when it
+// isn't. TestMTLS_RequireClientCert_RejectsPlaintextClient can't tell the
+// two apart — a plaintext client fails the TLS handshake either way.
+func TestMTLS_RequireClientCert_GatesTLSClientWithoutCert(t *testing.T) {
+	ca := newTestCA(t)
+	serverCertPEM, serverKeyPEM := ca.issue(t, "villains")
+	serverCertFile, serverKeyFile, caFile := writeCertFiles(t, serverCertPEM, serverKeyPEM, ca.certPEM)
+
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(ca.certPEM) {
+		t.Fatal("append CA cert to pool")
+	}
+	noCertClient := grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{
+		MinVersion: tls.VersionTLS12,
+		RootCAs:    pool,
+	}))
+
+	for _, tc := range []struct {
+		name    string
+		require bool
+		wantErr bool
+	}{
+		{"required", true, true},
+		{"optional", false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			serverTLS, err := grpcx.LoadMTLS(grpcx.TLSConfig{
+				CertFile: serverCertFile, KeyFile: serverKeyFile, CAFile: caFile, RequireClientCert: tc.require,
+			})
+			if err != nil {
+				t.Fatalf("LoadMTLS: %v", err)
+			}
+
+			server := grpcx.NewServer(grpcx.Dependencies{MTLS: serverTLS})
+			grpcx.RegisterHealth(server, nil, time.Second)
+
+			lis := mustListen(t)
+			go func() { _ = server.Serve(lis) }()
+			defer server.Stop()
+
+			conn, err := grpcx.Dial(lis.Addr().String(), grpcx.Dependencies{}, noCertClient)
+			if err != nil {
+				t.Fatalf("Dial: %v", err)
+			}
+			defer conn.Close()
+
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			_, err = healthpb.NewHealthClient(conn).Check(ctx, &healthpb.HealthCheckRequest{})
+			if tc.wantErr && err == nil {
+				t.Fatal("expected a TLS client presenting no certificate to be rejected")
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("expected a TLS client presenting no certificate to be accepted, got %v", err)
+			}
+		})
 	}
 }
 

@@ -56,6 +56,18 @@ type Base struct {
 	// the timeout middleware. Individual routes may override it.
 	RequestTimeoutSeconds int `env:"REQUEST_TIMEOUT_SECONDS" envDefault:"30"`
 
+	// HTTPReadTimeoutSeconds bounds how long the server spends reading an
+	// entire request, headers and body — the guard against a client that
+	// trickles a body in slowly enough to pin a connection and its
+	// goroutine (RequestTimeoutSeconds can't, since a handler's blocked
+	// Body.Read doesn't observe the request context). Zero disables it.
+	HTTPReadTimeoutSeconds int `env:"HTTP_READ_TIMEOUT_SECONDS" envDefault:"30"`
+
+	// HTTPIdleTimeoutSeconds bounds how long an idle keep-alive
+	// connection is held open between requests. Zero falls back to
+	// HTTPReadTimeoutSeconds (net/http's own rule).
+	HTTPIdleTimeoutSeconds int `env:"HTTP_IDLE_TIMEOUT_SECONDS" envDefault:"120"`
+
 	// MaxBodyBytes caps request body size. Zero disables the limit (not
 	// recommended).
 	MaxBodyBytes int64 `env:"MAX_BODY_BYTES" envDefault:"1048576"`

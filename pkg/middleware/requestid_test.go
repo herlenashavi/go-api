@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -94,5 +95,34 @@ func TestRequestIDLogFields_AttachesIDFromContext(t *testing.T) {
 func TestRequestIDLogFields_NilWithoutAnID(t *testing.T) {
 	if attrs := RequestIDLogFields(context.Background()); attrs != nil {
 		t.Fatalf("got %+v, want nil when no request ID is in context", attrs)
+	}
+}
+
+// TestRequestID_ReplacesInvalidInboundHeader: the inbound ID is
+// caller-controlled but echoed, logged on every line, and forwarded
+// downstream, so anything oversized or outside reqctx.ValidRequestID's
+// alphabet must be swapped for a generated one, not trusted.
+func TestRequestID_ReplacesInvalidInboundHeader(t *testing.T) {
+	for name, bad := range map[string]string{
+		"oversized":     strings.Repeat("a", 129),
+		"control chars": "abc\x01def",
+		"space":         "abc def",
+	} {
+		t.Run(name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			req.Header.Set(RequestIDHeader, bad)
+
+			ctxID, headerID := captureRequestID(t, req)
+
+			if ctxID == bad || headerID == bad {
+				t.Fatalf("invalid inbound ID %q was kept", bad)
+			}
+			if _, err := uuid.Parse(ctxID); err != nil {
+				t.Fatalf("replacement ID %q is not a UUID: %v", ctxID, err)
+			}
+			if headerID != ctxID {
+				t.Fatalf("echoed ID %q != context ID %q", headerID, ctxID)
+			}
+		})
 	}
 }

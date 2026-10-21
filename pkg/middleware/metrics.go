@@ -9,8 +9,9 @@ import (
 // MetricsConfig controls Metrics.
 type MetricsConfig struct {
 	Metrics *telemetry.HTTPMetrics
-	// IgnorePaths excludes matching paths (substring match) from RED
-	// metrics entirely — typically /health/* and /metrics itself, so
+	// IgnorePaths excludes matching paths (path-prefix match on whole
+	// segments, same as AccessLogConfig.IgnorePaths) from RED metrics
+	// entirely — typically /health/* and /metrics itself, so
 	// scrapers don't generate metrics about scraping.
 	IgnorePaths []string
 }

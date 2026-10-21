@@ -315,6 +315,50 @@ func TestAccessLog_OversizedBodyStillReachesHandler(t *testing.T) {
 	}
 }
 
+// countingReader records how many bytes have been read from it so far.
+type countingReader struct {
+	r io.Reader
+	n int
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n += n
+	return n, err
+}
+
+// TestAccessLog_OversizedBodyIsNotBufferedUpFront is the memory bound: in
+// app.New's chain AccessLog may see a body before (or without) BodyLimit,
+// so it must never read more than maxLoggedBodyBytes+1 bytes itself —
+// the rest has to stream through to the handler unread.
+func TestAccessLog_OversizedBodyIsNotBufferedUpFront(t *testing.T) {
+	big := `{"blob":"` + strings.Repeat("x", 4*maxLoggedBodyBytes) + `"}`
+	src := &countingReader{r: strings.NewReader(big)}
+
+	var readBeforeHandler, gotLen int
+	h := AccessLog(AccessLogConfig{
+		Logger:         jsonLogger(&bytes.Buffer{}, slog.LevelDebug),
+		LogRequestBody: true,
+	})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		readBeforeHandler = src.n
+		read, _ := io.ReadAll(r.Body)
+		gotLen = len(read)
+	}))
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/heroes", io.NopCloser(src))
+	req.Header.Set("Content-Type", "application/json")
+	h.ServeHTTP(httptest.NewRecorder(), req)
+
+	// strings.Reader may satisfy a read in larger chunks than asked, but
+	// LimitReader caps each request, so allow only the limit plus one.
+	if readBeforeHandler > maxLoggedBodyBytes+1 {
+		t.Fatalf("AccessLog read %d bytes before the handler ran, want at most %d", readBeforeHandler, maxLoggedBodyBytes+1)
+	}
+	if gotLen != len(big) {
+		t.Fatalf("handler read %d bytes, want the full %d", gotLen, len(big))
+	}
+}
+
 func TestAccessLog_MalformedJSONBodyIsNotLoggedButStillReadable(t *testing.T) {
 	const body = `{"name": not valid json`
 
@@ -362,7 +406,11 @@ func TestShouldIgnore(t *testing.T) {
 		want    bool
 	}{
 		{"/health/liveness", []string{"/health"}, true},
-		{"/v1/health-records", []string{"/health"}, true}, // substring match, documented
+		{"/health", []string{"/health"}, true},
+		{"/health/", []string{"/health/"}, true},
+		{"/v1/health-records", []string{"/health"}, false},
+		{"/v1/patients/42/health", []string{"/health"}, false},
+		{"/healthz", []string{"/health"}, false},
 		{"/v1/heroes", []string{"/health"}, false},
 		{"/v1/heroes", nil, false},
 		{"/metrics", []string{"/health", "/metrics"}, true},

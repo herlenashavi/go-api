@@ -100,28 +100,20 @@ func run(ctx context.Context) error {
 	authorizer := authz.New(policyStore, roles, nil)
 	authorizer.Debug = cfg.Debug
 
-	// --- Storage: in-memory with zero setup by default; set DATABASE_URL
-	// to run against real Postgres instead, via PGHeroStore (store_pg.go).
-	// Schema comes from examples/heroes/migrations, applied separately —
-	// see examples/heroes/migrate — not by this process at boot. ---
-	var store heroStore
-	healthChecks := []health.Check{
-		{Name: "hero-store", Checker: func(context.Context) error { return nil }},
-	}
-
+	// The readiness check closes over pool rather than taking
+	// pool.HealthCheck directly: the pool is built *after* app.New (below),
+	// because only then do the telemetry providers it should report into
+	// exist. pool stays nil for the in-memory store, which is always ready.
+	// Readiness isn't served until ListenAndServe, by which point pool is
+	// set for good.
 	var pool *dbx.Pool
-	if cfg.DatabaseURL != "" {
-		pool, err = dbx.NewPool(ctx, dbx.Config{DSN: cfg.DatabaseURL})
-		if err != nil {
-			return fmt.Errorf("connect to database: %w", err)
-		}
-		defer pool.Close()
-		store = NewPGHeroStore(pool)
-		healthChecks = []health.Check{
-			{Name: "hero-store", Checker: pool.HealthCheck},
-		}
-	} else {
-		store = NewMemoryHeroStore()
+	healthChecks := []health.Check{
+		{Name: "hero-store", Checker: func(ctx context.Context) error {
+			if pool == nil {
+				return nil
+			}
+			return pool.HealthCheck(ctx)
+		}},
 	}
 
 	application, err := app.New(ctx, app.Options{
@@ -132,6 +124,28 @@ func run(ctx context.Context) error {
 	})
 	if err != nil {
 		return err
+	}
+
+	// --- Storage: in-memory with zero setup by default; set DATABASE_URL
+	// to run against real Postgres instead, via PGHeroStore (store_pg.go).
+	// Schema comes from examples/heroes/migrations, applied separately —
+	// see examples/heroes/migrate — not by this process at boot. Passing
+	// the app's Tracer/Meter is what puts DB queries in the same trace and
+	// metrics pipeline as the HTTP requests that issue them. ---
+	var store heroStore
+	if cfg.DatabaseURL != "" {
+		pool, err = dbx.NewPool(ctx, dbx.Config{
+			DSN:    cfg.DatabaseURL,
+			Tracer: application.Telemetry.Tracer,
+			Meter:  application.Telemetry.Meter,
+		})
+		if err != nil {
+			return fmt.Errorf("connect to database: %w", err)
+		}
+		defer pool.Close()
+		store = NewPGHeroStore(pool)
+	} else {
+		store = NewMemoryHeroStore()
 	}
 
 	// Custom business metrics, on top of the framework's own http.server.*
@@ -190,7 +204,7 @@ func run(ctx context.Context) error {
 	// crud.NewResource returns a plain chi.Router, so this is just adding
 	// another route to it, not a special integration point.
 	heroes.Post("/{id}/retire", httpx.Handle(retireHandler(store, authorizer, cfg.Debug), cfg.Debug))
-	heroes.Get("/{id}/nemesis", httpx.Handle(nemesisHandler(store, villains), cfg.Debug))
+	heroes.Get("/{id}/nemesis", httpx.Handle(nemesisHandler(store, villains, authorizer), cfg.Debug))
 
 	application.Mount("/v1/heroes", heroes)
 
