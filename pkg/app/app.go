@@ -279,6 +279,8 @@ func (a *App) ListenAndServe(ctx context.Context) error {
 	a.server = &http.Server{
 		Handler:           a.Router,
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       time.Duration(a.Config.HTTPReadTimeoutSeconds) * time.Second,
+		IdleTimeout:       time.Duration(a.Config.HTTPIdleTimeoutSeconds) * time.Second,
 	}
 
 	errCh := make(chan error, 2) // HTTP and (if enabled) gRPC each report here

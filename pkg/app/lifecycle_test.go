@@ -2,6 +2,7 @@ package app_test
 
 import (
 	"context"
+	"io"
 	"net"
 	"net/http"
 	"testing"
@@ -42,6 +43,50 @@ func TestApp_ServerStoppingStopsTheOther(t *testing.T) {
 	if conn, err := net.DialTimeout("tcp", a.Addr(), time.Second); err == nil {
 		conn.Close()
 		t.Fatalf("HTTP server at %s is still accepting connections after ListenAndServe returned", a.Addr())
+	}
+}
+
+// TestApp_ReadTimeoutCutsOffATricklingBody: HTTP_READ_TIMEOUT_SECONDS must
+// actually reach the http.Server — a client that sends headers and then
+// trickles (here: stalls) its body has to be cut off at the read timeout,
+// not left holding a connection and goroutine until RequestTimeoutSeconds.
+func TestApp_ReadTimeoutCutsOffATricklingBody(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cfg := testConfig()
+	cfg.HTTPReadTimeoutSeconds = 1
+	cfg.RequestTimeoutSeconds = 10
+	a, err := app.New(ctx, app.Options{Config: cfg})
+	if err != nil {
+		t.Fatalf("app.New: %v", err)
+	}
+	upload := chi.NewRouter()
+	upload.Post("/", func(w http.ResponseWriter, r *http.Request) {
+		if _, err := io.ReadAll(r.Body); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+	a.MountPublic("/v1/upload", upload)
+
+	go func() { _ = a.ListenAndServe(ctx) }()
+	_ = waitForAddr(t, a)
+
+	conn, err := net.Dial("tcp", a.Addr())
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+	// Promise 1000 bytes, send 5, then stall.
+	_, _ = conn.Write([]byte("POST /v1/upload/ HTTP/1.1\r\nHost: x\r\nContent-Length: 1000\r\n\r\nhello"))
+
+	start := time.Now()
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	_, _ = io.ReadAll(conn) // returns once the server responds and closes, or at our 5s deadline
+	if elapsed := time.Since(start); elapsed > 3*time.Second {
+		t.Fatalf("server held the stalled upload for %v; want it cut off near the 1s read timeout", elapsed)
 	}
 }
 
